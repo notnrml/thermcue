@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark theme only. Tokens live in tailwind.config.ts; these variables exist
+   so charts and MapLibre expressions can read the same values at runtime. */
+:root {
+  --base-bg: #0b1220;
+  --base-surface: #121a2b;
+  --base-elevated: #1a2438;
+  --base-border: #2a3548;
+  --base-muted: #64748b;
+  --base-secondary: #94a3b8;
+  --base-tertiary: #cbd5e1;
+  --base-text: #f1f5f9;
+  --wbgt-low: #3b82f6;
+  --wbgt-moderate: #facc15;
+  --wbgt-high: #f97316;
+  --wbgt-extreme: #dc2626;
+  --wbgt-extreme-text: #ef4444;
+  --heat-1: #2c7bb6;
+  --heat-2: #6baed6;
+  --heat-3: #abd9e9;
+  --heat-4: #ffffbf;
+  --heat-5: #fdae61;
+  --heat-6: #f46d43;
+  --heat-7: #d7191c;
+  --success: #22c55e;
+  --warning: #facc15;
+  --agent: #a78bfa;
+  /* Cool accents for multi-line series so zone lines spread across the wheel
+     instead of clustering in red/orange/yellow. */
+  --teal: #2dd4bf;
+  --sky: #38bdf8;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--base-bg);
+  color: var(--base-text);
+}
+
+/* Trace affordance: anything clickable that opens a trace. */
+.trace-affordance {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--base-muted);
+  cursor: pointer;
+}
+
+/* Shade overlay: base-secondary at 35 percent with a diagonal hatch. */
+.shade-hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(148, 163, 184, 0.35) 0,
+    rgba(148, 163, 184, 0.35) 2px,
+    transparent 2px,
+    transparent 8px
+  );
+}
