@@ -411,10 +411,14 @@ def optimise(
     # nothing is right would be unable to express that.
     proposals.insert(0, baseline_plan.staff_by_block)
 
+    # A four-point share grid rather than two. Staggering is the cheapest lever
+    # on the board - it costs nothing operationally - so it is worth searching
+    # finely; the simulations are a millisecond each.
+    share_grid = [limits.stagger_max_share * f for f in (0.25, 0.5, 0.75, 1.0)]
     stagger_options = [
         (share, offset)
         for offset in limits.stagger_offsets_min
-        for share in ({0.0} if offset == 0 else {limits.stagger_max_share / 2, limits.stagger_max_share})
+        for share in ({0.0} if offset == 0 else share_grid)
     ]
     if (0.0, 0) not in stagger_options:
         stagger_options.insert(0, (0.0, 0))
@@ -422,56 +426,90 @@ def optimise(
     best = baseline
     evaluated = 0
 
-    def consider(candidate: Plan) -> bool:
-        """Score a candidate and adopt it if it wins under the constraint."""
-        nonlocal best, evaluated
+    def consider_against(incumbent: ScoredPlan, candidate: Plan) -> ScoredPlan | None:
+        """Score a candidate and return it if it beats the incumbent.
+
+        Everything scored lands in the archive whether or not it wins, including
+        candidates rejected by the wait constraint, because those are exactly the
+        points that make the Pareto frontier a frontier.
+        """
+        nonlocal evaluated, best
         scored = _score(scenario, candidate, thermal, seed)
         evaluated += 1
         if scored is None:
-            return False
+            return None
         if archive is not None:
             archive.append(scored)
         if scored.total_wait > wait_cap:
-            return False
+            return None
         if scored.hpm < best.hpm - 1e-9:
             best = scored
-            return True
-        return False
+        if scored.hpm < incumbent.hpm - 1e-9:
+            return scored
+        return None
 
-    # Pass 1: gate opening offsets, exhaustively. Four gates times four offsets
-    # is 256 combinations, which at roughly a millisecond a simulation is cheap
-    # enough to enumerate rather than approximate.
-    for combination in itertools.product(limits.gate_open_offsets_min, repeat=len(scenario.gates)):
-        offsets = {g.id: combination[i] for i, g in enumerate(scenario.gates)}
-        consider(best.plan.with_changes(gate_open_offset_min=offsets, label="offsets"))
+    def descend(start: ScoredPlan) -> ScoredPlan:
+        """Coordinate descent from one starting plan.
 
-    # Pass 2 onward: coordinate descent across staffing, stagger and offsets,
-    # repeating until a full pass yields nothing. Each family is optimised
-    # against the current best rather than the baseline, so interactions between
-    # levers are picked up.
-    for _ in range(MAX_COORDINATE_PASSES):
-        improved = False
+        Each lever family is optimised against the current incumbent rather than
+        against the start, so interactions between levers are picked up. Stops
+        when a full pass changes nothing.
+        """
+        incumbent = start
+        for _ in range(MAX_COORDINATE_PASSES):
+            improved = False
 
-        for allocation in proposals:
-            improved |= consider(
-                best.plan.with_changes(staff_by_block=allocation, label="staffing")
-            )
-
-        for share, offset in stagger_options:
-            improved |= consider(
-                best.plan.with_changes(
-                    stagger_share=share, stagger_offset_min=offset, label="stagger"
+            for combination in itertools.product(
+                limits.gate_open_offsets_min, repeat=len(scenario.gates)
+            ):
+                offsets = {g.id: combination[i] for i, g in enumerate(scenario.gates)}
+                found = consider_against(
+                    incumbent, incumbent.plan.with_changes(gate_open_offset_min=offsets)
                 )
-            )
+                if found is not None:
+                    incumbent, improved = found, True
 
-        for combination in itertools.product(
-            limits.gate_open_offsets_min, repeat=len(scenario.gates)
-        ):
-            offsets = {g.id: combination[i] for i, g in enumerate(scenario.gates)}
-            improved |= consider(best.plan.with_changes(gate_open_offset_min=offsets, label="offsets"))
+            for allocation in proposals:
+                found = consider_against(
+                    incumbent, incumbent.plan.with_changes(staff_by_block=allocation)
+                )
+                if found is not None:
+                    incumbent, improved = found, True
 
-        if not improved:
-            break
+            for share, offset in stagger_options:
+                found = consider_against(
+                    incumbent,
+                    incumbent.plan.with_changes(
+                        stagger_share=share, stagger_offset_min=offset
+                    ),
+                )
+                if found is not None:
+                    incumbent, improved = found, True
+
+            if not improved:
+                break
+        return incumbent
+
+    # Multi-start. Coordinate descent is greedy and path-dependent: descending
+    # from the baseline alone lands in whichever local optimum the first
+    # improving move happens to lead to, and refining the stagger grid was
+    # observed to make the result *worse* by 0.5 points for exactly that reason.
+    # Restarting from each staffing proposal costs a few thousand simulations at
+    # roughly a millisecond each and removes the dependence on move ordering.
+    starts: list[ScoredPlan] = [baseline]
+    for allocation in proposals:
+        seeded = _score(
+            scenario, baseline_plan.with_changes(staff_by_block=allocation), thermal, seed
+        )
+        evaluated += 1
+        if seeded is None:
+            continue
+        if archive is not None:
+            archive.append(seeded)
+        starts.append(seeded)
+
+    for start in starts:
+        descend(start)
 
     return baseline, ScoredPlan(plan=best.plan.with_changes(label="optimised"), result=best.result), evaluated
 

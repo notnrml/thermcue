@@ -71,6 +71,40 @@ class DirectiveRejected(RuntimeError):
     """A generated directive cited a number no tool produced."""
 
 
+#: Cap on a serialised tool output in the published trace. Whole responses can
+#: run to megabytes of GeoJSON and the trace is rendered in a side panel.
+TRACE_OUTPUT_LIMIT = 4000
+
+
+def _trace_json(payload: Any) -> str:
+    """Serialise a tool result for the audit trail, truncating into valid JSON.
+
+    Slicing the string at a character limit was the first implementation and it
+    produced unparseable output the moment a result exceeded the cap - which the
+    thermal state always does. A trace exists to be audited; one that cannot be
+    parsed is not a trace. When the payload is too large it is replaced by a
+    valid object that says so and carries the top-level keys, so a reader can
+    still see what the tool returned and go fetch the full version.
+    """
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+    if len(encoded) <= TRACE_OUTPUT_LIMIT:
+        return encoded
+    summary: dict[str, Any] = {
+        "_truncated": True,
+        "_full_length_chars": len(encoded),
+        "_note": (
+            "Full output exceeded the trace limit. Keys are listed below; the "
+            "complete result is available from the endpoint that produced it."
+        ),
+    }
+    if isinstance(payload, dict):
+        summary["_keys"] = sorted(payload.keys())
+        for key, value in payload.items():
+            if isinstance(value, (int, float, str, bool)) or value is None:
+                summary[key] = value
+    return json.dumps(summary, sort_keys=True, default=str)
+
+
 @dataclass(slots=True)
 class ToolCall:
     name: str
@@ -81,7 +115,7 @@ class ToolCall:
         return ToolTrace(
             tool=self.name,
             input=json.dumps(self.arguments, sort_keys=True, default=str),
-            output=json.dumps(self.result, sort_keys=True, default=str)[:4000],
+            output=_trace_json(self.result),
         )
 
 
