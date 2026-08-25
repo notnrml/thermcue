@@ -1,6 +1,6 @@
 # Headline results
 
-Measured **2026-08-25 06:34 UTC** by `engine/scripts/headline.py`, seed `20260829`.
+Measured **2026-08-25 08:52 UTC** by `engine/scripts/headline.py`, seed `20260829`.
 
 > These figures depend on a live forecast for an event four days out, and that forecast moves. Regenerate with `.venv/bin/python scripts/headline.py` rather than trusting a stale copy.
 
@@ -20,23 +20,21 @@ Measured **2026-08-25 06:34 UTC** by `engine/scripts/headline.py`, seed `2026082
 
 | | Baseline | ThermCue plan | Change |
 |---|---:|---:|---:|
-| Heat-weighted person-minutes | 980,582 | 750,170 | **-23.5 %** |
-| Person-minutes in High/Extreme | 78,250 | 34,329 | |
-| Total wait (person-minutes) | 902,332 | 715,841 | **-20.7 %** |
-| Longest single wait | 199 min | 115 min | |
+| Heat-weighted person-minutes | 980,582 | 750,646 | **-23.4 %** |
+| Person-minutes in High/Extreme | 78,250 | 32,263 | |
+| Total wait (person-minutes) | 902,332 | 718,383 | **-20.4 %** |
+| Longest single wait | 199 min | 151 min | |
 
-Candidate plans simulated: **3,245**.
+Candidate plans simulated: **12,247**.
 
 ## Changes and their counterfactual shares
 
 | Share | Change |
 |---:|---|
-| 27.9 % | Move 2 staff from Gate A (8 to 6) |
-| 27.9 % | Move 2 staff from Gate C (4 to 2) |
-| 17.1 % | Open Gate C 45 minutes early |
-| 12.8 % | Move 3 staff to Gate D (3 to 6) |
-| 9.9 % | Move 2 staff to Gate A (8 to 10) |
-| 4.4 % | Stagger 20% of arrivals by 30 minutes |
+| 42.5 % | Move 1 staff from Gate C (4 to 3) |
+| 24.0 % | Move 1 staff to Gate D (3 to 4) |
+| 23.8 % | Open Gate C 45 minutes early |
+| 9.7 % | Stagger 20% of arrivals by 30 minutes |
 | relief | Relocate Water 1 from z-plaza to z-west-queue |
 | relief | Relocate Water 2 from z-lawn to z-plaza |
 
@@ -44,10 +42,10 @@ Candidate plans simulated: **3,245**.
 
 | Weighting | Baseline HPM | Plan HPM | Reduction | Plan wins |
 |---|---:|---:|---:|---|
-| linear-0134 | 1,058,832 | 784,499 | 25.91 % | yes |
-| headline-0124 | 980,582 | 750,170 | 23.50 % | yes |
-| steep-0135 | 1,058,832 | 784,499 | 25.91 % | yes |
-| flat-0123 | 980,582 | 750,170 | 23.50 % | yes |
+| linear-0134 | 1,058,832 | 782,909 | 26.06 % | yes |
+| headline-0124 | 980,582 | 750,646 | 23.45 % | yes |
+| steep-0135 | 1,058,832 | 782,909 | 26.06 % | yes |
+| flat-0123 | 980,582 | 750,646 | 23.45 % | yes |
 
 ## Validation against the single station
 
@@ -74,5 +72,5 @@ Candidate plans simulated: **3,245**.
 - The optimiser searches and the simulator judges: every candidate plan reported here was scored by running the queue simulation, not by evaluating a surrogate objective.
 - Counterfactual shares come from leave-one-out re-simulation and are normalised over positive contributions. They do not sum to the total improvement when levers interact, which is why the raw HPM deltas are reported alongside them.
 - Resource relocations are scored against relief coverage, not HPM: a water point does not shorten a queue, and crediting it with a wait reduction would be false.
-- 3245 candidate plans were simulated to produce this result.
+- 12247 candidate plans were simulated to produce this result.
 - The Pareto frontier is flat: the best plan does not need any extra wait allowance, so loosening the wait constraint buys no further heat reduction. That is a real finding about this scenario, not a missing sweep.

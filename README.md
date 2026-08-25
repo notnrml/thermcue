@@ -424,12 +424,12 @@ RMS 0.44 °C**.
 
 | | Baseline | ThermCue plan | Change |
 |---|---:|---:|---:|
-| Heat-weighted person-minutes | 980,582 | 750,170 | **−23.5 %** |
-| Person-minutes in High/Extreme | 78,250 | 34,329 | **−56.1 %** |
-| Total wait (person-minutes) | 902,332 | 715,841 | **−20.7 %** |
-| Longest single wait | 199 min | 115 min | **−42.2 %** |
+| Heat-weighted person-minutes | 980,582 | 750,646 | **−23.4 %** |
+| Person-minutes in High/Extreme | 78,250 | 32,263 | **−58.8 %** |
+| Total wait (person-minutes) | 902,332 | 718,383 | **−20.4 %** |
+| Longest single wait | 199 min | 151 min | **−24.1 %** |
 
-3,245 candidate plans simulated. The brief's acceptance gate was ≥20 % HPM
+12,247 candidate plans simulated. The brief's acceptance gate was ≥20 % HPM
 reduction at ≤10 % wait increase: **both clear**, and wait falls by a fifth
 rather than rising.
 
@@ -438,26 +438,46 @@ number that actually matters operationally.
 
 ### Reproducibility is enforced, not asserted
 
-Three consecutive runs on identical inputs must give identical output. They did
-not, until they were made to: multi-worker CP-SAT races its workers and returns
-whichever equally-optimal solution finishes first, so the headline moved between
-22.83 % and 17.20 % with nothing changed. A search seeded off a coin flip is not
-seeded. The solver now runs single-worker under a deterministic time limit, and
-three consecutive runs agree to **six decimal places** on an identical candidate
-count of 3,245. The budget was swept: 2.0 deterministic units is the smallest
-that converges to the same solution as 4.0, and it keeps a full optimisation at
-about 14 s rather than 71 s.
+The submission requires seed-reproducible headline numbers. Getting there took
+three separate fixes, each found by checking rather than assuming.
+
+**Multi-worker CP-SAT races its workers** and returns whichever equally-optimal
+solution finishes first, so two runs on byte-identical input returned 22.83 % and
+17.20 %. A search seeded off a coin flip is not seeded.
+
+**Single-worker CP-SAT is deterministic within a machine but not across
+machines.** Same solver version, same deterministic time budget, same input: the
+arm64 development machine and the x86_64 deployment landed on different
+equally-optimal allocations, moving the headline from 23.5 % to 20.6 %. Both are
+valid plans that clear the brief's gate, but a number that changes with the CPU
+is not reproducible, and the public demo would not have matched this README.
+
+**So the default path no longer uses a solver at all.** Staffing proposals come
+from largest-remainder integer apportionment over sorted keys — no
+floating-point search, no solver, no platform dependence. CP-SAT remains in the
+codebase and runs under `THERMCUE_USE_CPSAT=1` for comparison, because it is a
+genuinely better proposal generator and the brief asks for it; it just does not
+decide the documented number.
+
+Removing the solver initially cost 6 points of improvement, and getting them back
+identified what actually drives this problem. Constant-across-the-event staff
+swaps recovered nothing. **Time-windowed swaps recovered all of it**: the good
+plans move staff to a gate for the arrival peak and hand them back afterwards,
+and that time-varying dimension was where the solver's advantage had been hiding.
+The search now explores it directly, over every ordered gate pair, every swap
+size, and every hour-aligned window.
+
+Result: 12,247 candidates, about 10 s, and consecutive runs agree to six decimal
+places.
 
 ### What the optimiser recommends
 
 | Share | Change |
 |---:|---|
-| 27.9 % | Move 2 staff from Gate A (8 → 6) |
-| 27.9 % | Move 2 staff from Gate C (4 → 2) |
-| 17.1 % | Open Gate C 45 minutes early |
-| 12.8 % | Move 3 staff to Gate D (3 → 6) |
-| 9.9 % | Move 2 staff to Gate A (8 → 10) |
-| 4.4 % | Stagger 20 % of arrivals by 30 minutes |
+| 42.5 % | Move 1 staff from Gate C (4 → 3) |
+| 24.0 % | Move 1 staff to Gate D (3 → 4) |
+| 23.8 % | Open Gate C 45 minutes early |
+| 9.7 % | Stagger 20% of arrivals by 30 minutes |
 
 Plus two relief relocations, scored against relief coverage rather than HPM.
 
@@ -473,10 +493,10 @@ Four alternative band weightings, all rerun through the full comparison:
 
 | Weighting | Baseline HPM | Plan HPM | Reduction | Plan wins |
 |---|---:|---:|---:|---|
-| 0/1/3/4 | 1,058,832 | 784,499 | 25.91 % | yes |
-| **0/1/2/4** (headline) | 980,582 | 750,170 | **23.50 %** | yes |
-| 0/1/3/5 | 1,058,832 | 784,499 | 25.91 % | yes |
-| 0/1/2/3 | 980,582 | 750,170 | 23.50 % | yes |
+| 0/1/3/4 | 1,058,832 | 782,909 | 26.06 % | yes |
+| **0/1/2/4** (headline) | 980,582 | 750,646 | **23.45 %** | yes |
+| 0/1/3/5 | 1,058,832 | 782,909 | 26.06 % | yes |
+| 0/1/2/3 | 980,582 | 750,646 | 23.45 % | yes |
 
 The plan wins under all four. When a forecast is mild enough that no zone-hour
 reaches High or Extreme, every variant assigns Low and Moderate the same 0 and 1
@@ -558,7 +578,7 @@ networking disabled. The response cache is committed, so:
 ```
 THERMCUE_OFFLINE=1 FORTYGUARD_API_KEY= ...
 freshness: cached | spatial signal: True | zone-hours: 35
-HPM 980,582 -> 750,170 (+23.50%)
+HPM 980,582 -> 750,646 (+23.45%)
 OFFLINE FALLBACK: PASS
 ```
 

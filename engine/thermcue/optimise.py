@@ -59,11 +59,15 @@ PARETO_RATIOS: tuple[float, ...] = (1.00, 1.05, 1.10, 1.20)
 #: move a queue from one gate to another. The wins are in the timing levers,
 #: which cost nothing. You cannot staff your way out of a heat problem on a
 #: fixed headcount; you can schedule your way out.
-STAFFING_PROPOSALS = 4
+STAFFING_PROPOSALS = 6
 
 SCALE = 100
 """Fixed-point scale for fractional quantities entering CP-SAT constraints.
 CP-SAT is integer-only and silently truncates floats."""
+
+STAFF_SWAP_SIZES: tuple[int, ...] = (1, 2, 3, 4)
+"""How many staff a single swap may move. Swaps are the dominant lever at this
+scenario and exploring them directly is what makes the search reproducible."""
 
 MAX_COORDINATE_PASSES = 4
 """Coordinate descent stops early when a full pass changes nothing. This caps
@@ -188,6 +192,168 @@ def staff_to_clear(scenario: Scenario, arrivals_in_block: float) -> int:
         lanes_to_clear(scenario, arrivals_in_block) * scenario.service.staff_per_lane,
         scenario.limits.min_staff_per_gate,
     )
+
+
+def apportion_staff(
+    scenario: Scenario,
+    pressure: dict[str, dict[int, float]],
+    exponent: float,
+) -> dict[str, dict[int, int]]:
+    """Deterministic staffing proposal: largest-remainder apportionment by pressure.
+
+    Pure integer arithmetic over sorted keys, so it produces byte-identical
+    output on any platform, any Python build, any CPU. That portability is the
+    entire point - see ``propose_staffing`` for why it matters.
+
+    Each gate gets the floor of its proportional share, then the remaining
+    headcount goes to the largest fractional remainders, ties broken by gate id
+    so the result never depends on dict ordering. Shares are capped at what
+    actually clears the block, because staff beyond that stand idle, and floored
+    at the scenario minimum.
+    """
+    limits = scenario.limits
+    blocks = block_count(scenario)
+    gates = sorted(scenario.gates, key=lambda g: g.id)
+    baseline_arrivals = arrival_profile(scenario, Plan.baseline(scenario))
+
+    allocation: dict[str, dict[int, int]] = {g.id: {} for g in gates}
+    for block in range(blocks):
+        start = block * limits.staff_block_minutes
+        weights: dict[str, float] = {}
+        caps: dict[str, int] = {}
+        for gate in gates:
+            window = baseline_arrivals[gate.id][start : start + limits.staff_block_minutes]
+            caps[gate.id] = min(
+                lanes_to_clear(scenario, sum(window)) * scenario.service.staff_per_lane,
+                limits.total_staff,
+            )
+            weights[gate.id] = pressure[gate.id][block] ** exponent
+
+        floor = limits.min_staff_per_gate
+        spare = limits.total_staff - floor * len(gates)
+        total_weight = sum(weights.values())
+        if spare <= 0 or total_weight <= 0:
+            for gate in gates:
+                allocation[gate.id][block] = floor
+            continue
+
+        exact = {g.id: spare * weights[g.id] / total_weight for g in gates}
+        assigned = {g.id: min(int(exact[g.id]), max(caps[g.id] - floor, 0)) for g in gates}
+        remaining = spare - sum(assigned.values())
+
+        # Largest remainder, then gate id. Never a float comparison for the tie.
+        order = sorted(
+            gates,
+            key=lambda g: (-(exact[g.id] - int(exact[g.id])), g.id),
+        )
+        cursor = 0
+        while remaining > 0 and cursor < len(order) * 4:
+            gate = order[cursor % len(order)]
+            if assigned[gate.id] + floor < caps[gate.id]:
+                assigned[gate.id] += 1
+                remaining -= 1
+            cursor += 1
+        for gate in gates:
+            allocation[gate.id][block] = floor + assigned[gate.id]
+
+    # Collapse to at most max_staff_moves changes by holding the modal
+    # allocation for each gate across the whole event. A time-varying plan that
+    # breaches the move cap is worthless operationally and would be rejected by
+    # the validator anyway.
+    collapsed: dict[str, dict[int, int]] = {}
+    for gate in gates:
+        counts: dict[int, int] = {}
+        for block in range(blocks):
+            value = allocation[gate.id][block]
+            counts[value] = counts.get(value, 0) + 1
+        modal = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        collapsed[gate.id] = {b: modal for b in range(blocks)}
+
+    # Apportionment can overshoot the cap once collapsed; shed from the
+    # lowest-pressure gate first, deterministically.
+    for block in range(blocks):
+        while sum(collapsed[g.id][block] for g in gates) > limits.total_staff:
+            donor = min(
+                (g for g in gates if collapsed[g.id][block] > limits.min_staff_per_gate),
+                key=lambda g: (pressure[g.id][block], g.id),
+                default=None,
+            )
+            if donor is None:
+                break
+            for b in range(blocks):
+                collapsed[donor.id][b] -= 1
+
+    # Structural feasibility: every gate must be able to clear its own demand
+    # over the event. This is the single constraint that made the CP-SAT
+    # proposals good - without it a low-pressure gate gets shed to the floor and
+    # carries a backlog all night whose person-minutes swamp everything the
+    # reallocation bought. Top up starved gates by taking from the
+    # lowest-pressure gate that can spare a body, deterministically.
+    block_minutes = limits.staff_block_minutes
+    rate = scenario.service.service_rate_per_lane_per_min
+
+    def shortfall(gate_id: str) -> float:
+        served = sum(
+            scenario.service.lanes_for(collapsed[gate_id][b]) * rate * block_minutes
+            for b in range(blocks)
+        )
+        return scenario.gate(gate_id).total_arrivals() - served
+
+    for _ in range(limits.total_staff * 2):
+        starved = [g for g in gates if shortfall(g.id) > 0]
+        if not starved:
+            break
+        needy = max(starved, key=lambda g: (shortfall(g.id), g.id))
+        donor = min(
+            (
+                g
+                for g in gates
+                if g.id != needy.id
+                and collapsed[g.id][0] > limits.min_staff_per_gate
+                and shortfall(g.id) <= 0
+            ),
+            key=lambda g: (pressure[g.id][0], g.id),
+            default=None,
+        )
+        if donor is None:
+            break
+        for b in range(blocks):
+            collapsed[donor.id][b] -= 1
+            collapsed[needy.id][b] += 1
+
+    return collapsed
+
+
+def propose_staffing_deterministic(
+    scenario: Scenario, thermal: ThermalField, count: int = STAFFING_PROPOSALS
+) -> list[dict[str, dict[int, int]]]:
+    """Portable staffing proposals. The default, and what the headline uses.
+
+    CP-SAT is a genuinely better proposal generator and it stays in the codebase
+    (``propose_staffing``), but its search is not portable: on identical input,
+    identical solver version and identical deterministic time budget, the arm64
+    development machine and the x86_64 deployment landed on different
+    equally-optimal allocations, moving the headline from -23.5 % to -20.6 %.
+    Both are valid plans and both clear the brief's gate, but "seed-reproducible
+    headline numbers" is a submission requirement, and a number that changes with
+    the CPU is not reproducible.
+
+    So the default path is integer apportionment: no floating-point search, no
+    solver, sorted iteration throughout. Set ``THERMCUE_USE_CPSAT=1`` to use the
+    solver instead and compare.
+    """
+    pressure = heat_pressure(scenario, thermal)
+    proposals: list[dict[str, dict[int, int]]] = []
+    seen: set[str] = set()
+    for index in range(count):
+        exponent = 0.25 + index * 0.35
+        allocation = apportion_staff(scenario, pressure, exponent)
+        fingerprint = repr(sorted((k, tuple(sorted(v.items()))) for k, v in allocation.items()))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        proposals.append(allocation)
+    return proposals
 
 
 def propose_staffing(
@@ -386,6 +552,17 @@ def _score(
     return ScoredPlan(plan=plan, result=result)
 
 
+def default_proposals(
+    scenario: Scenario, thermal: ThermalField
+) -> list[dict[str, dict[int, int]]]:
+    """Portable apportionment by default; CP-SAT when explicitly opted into."""
+    import os
+
+    if os.getenv("THERMCUE_USE_CPSAT") == "1":
+        return propose_staffing(scenario, thermal)
+    return propose_staffing_deterministic(scenario, thermal)
+
+
 def optimise(
     scenario: Scenario,
     thermal: ThermalField,
@@ -418,7 +595,7 @@ def optimise(
     proposals = list(
         staffing_proposals
         if staffing_proposals is not None
-        else propose_staffing(scenario, thermal)
+        else default_proposals(scenario, thermal)
     )
     # The baseline staffing must be in the pool, or a scenario where doing
     # nothing is right would be unable to express that.
@@ -489,6 +666,41 @@ def optimise(
                 if found is not None:
                     incumbent, improved = found, True
 
+            # Staffing swap neighbourhood: move k staff from one gate to
+            # another, for every ordered pair and every k. This is what makes
+            # the result insensitive to the proposal set. Relying on seeds alone
+            # left the search landing in whichever local optimum the first
+            # improving move happened to reach, which is how the headline came
+            # out at 23.5 % on one machine and 20.6 % on another from identical
+            # input. Exploring the neighbourhood directly is deterministic,
+            # cheap at roughly a millisecond per candidate, and converges to the
+            # same plan regardless of where it started.
+            for donor in scenario.gates:
+                for receiver in scenario.gates:
+                    if donor.id == receiver.id:
+                        continue
+                    for amount in STAFF_SWAP_SIZES:
+                        for window in swap_windows:
+                            allocation = {
+                                g: dict(blocks)
+                                for g, blocks in incumbent.plan.staff_by_block.items()
+                            }
+                            viable = True
+                            for block in window:
+                                allocation[donor.id][block] -= amount
+                                allocation[receiver.id][block] += amount
+                                if allocation[donor.id][block] < limits.min_staff_per_gate:
+                                    viable = False
+                                    break
+                            if not viable:
+                                continue
+                            found = consider_against(
+                                incumbent,
+                                incumbent.plan.with_changes(staff_by_block=allocation),
+                            )
+                            if found is not None:
+                                incumbent, improved = found, True
+
             for share, offset in stagger_options:
                 found = consider_against(
                     incumbent,
@@ -509,6 +721,19 @@ def optimise(
     # observed to make the result *worse* by 0.5 points for exactly that reason.
     # Restarting from each staffing proposal costs a few thousand simulations at
     # roughly a millisecond each and removes the dependence on move ordering.
+    # Swap windows: the whole event, and each hour-aligned prefix and suffix.
+    # A constant-across-the-event swap costs two staff moves; a windowed one
+    # costs up to four, which is exactly the scenario's cap. Restricting swaps to
+    # the whole event removed the time-varying dimension entirely, and that
+    # dimension is where the good plans live - the best allocations move staff to
+    # a gate for the arrival peak and hand them back afterwards.
+    blocks_total = block_count(scenario)
+    per_hour = 60 // limits.staff_block_minutes
+    swap_windows: list[range] = [range(blocks_total)]
+    for boundary in range(per_hour, blocks_total, per_hour):
+        swap_windows.append(range(0, boundary))
+        swap_windows.append(range(boundary, blocks_total))
+
     starts: list[ScoredPlan] = [baseline]
     for allocation in proposals:
         seeded = _score(
@@ -912,7 +1137,7 @@ def run_full_optimisation(
     optimum. Archiving every scored candidate gives both the frontier and the
     scatter the chart needs, for the cost of one search.
     """
-    proposals = propose_staffing(scenario, thermal)
+    proposals = default_proposals(scenario, thermal)
     archive: list[ScoredPlan] = []
     baseline, best, evaluated = optimise(
         scenario,

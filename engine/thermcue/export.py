@@ -316,7 +316,7 @@ def render_ics(
     def escape(value: str) -> str:
         return (
             value.replace("\\", "\\\\")
-            .replace(";", "\;")
+            .replace(";", "\\;")
             .replace(",", "\\,")
             .replace("\n", "\\n")
         )
