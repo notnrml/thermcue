@@ -10,18 +10,27 @@ Resilient Cities, Data Analysis & Correlation
 
 ## The pitch
 
-An event site is not one temperature. A Phoenix festival plaza and the irrigated
-lawn 200 metres away can differ by several degrees of wet-bulb globe
-temperature, and the difference decides who collapses in a queue. Every event
-plan in use today is built on a single airport weather station.
+Every outdoor event plan in use today is built on a single airport weather
+station, several kilometres from where the crowd actually stands.
 
-ThermCue reads the venue at 60-metre resolution, simulates the queues minute by
-minute, and searches for an operating plan that moves people out of the hot
-zones without making anyone wait longer. An autonomous agent then watches the
-forecast and republishes the plan on its own when conditions move.
+We measured what that costs, using FortyGuard. Across the venue the **air
+temperature** is essentially uniform — 0.07 °C between the hottest and coolest
+zone. That is the honest result, and it is not the interesting one. What varies
+is the **heat load**: sun, surface and shade. On the same site, at the same air
+temperature, wet-bulb globe temperature spans zones, and **19 zone-hours fall in
+a different heat band from what the airport reports**. An operator reading the
+station would have staffed those hours wrong.
+
+ThermCue reads the venue at 60-metre resolution, computes shade from real
+building geometry, simulates the queues minute by minute, and searches for an
+operating plan that moves people out of the dangerous zones. An autonomous agent
+then watches the forecast and republishes the plan on its own when conditions
+move.
 
 The metric is **heat-weighted person-minutes**: not how long people wait, but
-how long they wait *in the heat*.
+how long they wait *in the heat*. On the demo scenario it falls **23 %**, and the
+exposure in the High and Extreme bands falls **59 %**, while total wait falls
+too.
 
 ---
 
@@ -38,6 +47,28 @@ a cohort, relocate a water point. ThermCue tells them which of those to pull,
 when, and what it buys.
 
 ---
+
+## Live demo
+
+| | |
+|---|---|
+| **Application** | **https://thermcue.vercel.app** |
+| Engine API | https://thermcue-engine.fly.dev |
+| Health and configured sources | https://thermcue-engine.fly.dev/health |
+| FortyGuard credit spend | https://thermcue-engine.fly.dev/credits |
+| Agent demo trigger | `POST https://thermcue-engine.fly.dev/agent/trigger?zone_id=z-lawn&delta_c=3` |
+| One-page action card | https://thermcue-engine.fly.dev/export/pdf |
+
+No login, no installation. The engine serves the committed response cache, so the
+demo renders the same numbers this README quotes even if the FortyGuard API is
+unreachable during judging.
+
+**One caveat stated up front:** no Anthropic key is configured on the deployment,
+so the agent runs its deterministic path and labels itself `engine:
+"deterministic"` in every directive and in the console. It uses the same seven
+tools, the same guardrails and the same numeric grounding; it is not the
+model-driven agent, and it does not pretend to be. Set `ANTHROPIC_API_KEY` on the
+engine and the same endpoint returns `engine: "anthropic"`.
 
 ## Quickstart
 
