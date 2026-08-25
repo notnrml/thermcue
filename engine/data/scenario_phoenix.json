@@ -1,0 +1,158 @@
+{
+  "$schema": "./scenario.schema.md",
+  "id": "sc-desert-sound-2026",
+  "venue": "Margaret T. Hance Park, Phoenix",
+  "event_name": "Desert Sound Festival",
+  "date": "2026-08-29",
+  "timezone": "America/Phoenix",
+  "centroid": [-112.0755, 33.4634],
+  "time_window": { "start_hour": 15, "end_hour": 21 },
+  "expected_attendance": 21500,
+  "notes": [
+    "Arrival curves, service rates and staffing are a planning scenario, not observed attendance data. They are the operator's inputs in the real product and are stated as assumptions in the README.",
+    "Every temperature in the served payload comes from FortyGuard and the forecast composition; nothing thermal is authored in this file."
+  ],
+
+  "aoi": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": { "name": "venue-aoi-with-buffer" },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[
+            [-112.0800, 33.4610],
+            [-112.0685, 33.4610],
+            [-112.0685, 33.4665],
+            [-112.0800, 33.4665],
+            [-112.0800, 33.4610]
+          ]]
+        }
+      }
+    ]
+  },
+
+  "zones": [
+    {
+      "id": "z-plaza",
+      "name": "Civic Plaza",
+      "centroid": [-112.0751, 33.4630],
+      "polygon": [[-112.0765,33.4622],[-112.0737,33.4622],[-112.0737,33.4638],[-112.0765,33.4638],[-112.0765,33.4622]],
+      "surface": "hardscape",
+      "built_shade_fraction": 0.06,
+      "capacity_persons": 4200
+    },
+    {
+      "id": "z-concourse",
+      "name": "North Concourse",
+      "centroid": [-112.0744, 33.4646],
+      "polygon": [[-112.0765,33.4640],[-112.0723,33.4640],[-112.0723,33.4652],[-112.0765,33.4652],[-112.0765,33.4640]],
+      "surface": "mixed",
+      "built_shade_fraction": 0.28,
+      "capacity_persons": 3000
+    },
+    {
+      "id": "z-lawn",
+      "name": "Event Lawn",
+      "centroid": [-112.0718, 33.4630],
+      "polygon": [[-112.0735,33.4622],[-112.0701,33.4622],[-112.0701,33.4638],[-112.0735,33.4638],[-112.0735,33.4622]],
+      "surface": "turf",
+      "built_shade_fraction": 0.02,
+      "capacity_persons": 9000
+    },
+    {
+      "id": "z-west-queue",
+      "name": "West Queue",
+      "centroid": [-112.0775, 33.4637],
+      "polygon": [[-112.0782,33.4622],[-112.0767,33.4622],[-112.0767,33.4652],[-112.0782,33.4652],[-112.0782,33.4622]],
+      "surface": "hardscape",
+      "built_shade_fraction": 0.10,
+      "capacity_persons": 2600
+    },
+    {
+      "id": "z-staff",
+      "name": "Staff Compound",
+      "centroid": [-112.0690, 33.4646],
+      "polygon": [[-112.0699,33.4640],[-112.0681,33.4640],[-112.0681,33.4652],[-112.0699,33.4652],[-112.0699,33.4640]],
+      "surface": "mixed",
+      "built_shade_fraction": 0.42,
+      "capacity_persons": 700
+    }
+  ],
+
+  "gates": [
+    {
+      "id": "g-a", "name": "Gate A",
+      "coordinates": [-112.0768, 33.4620],
+      "queue_zone": "z-west-queue",
+      "staff_count": 8, "scheduled_open_hour": 15,
+      "arrivals_by_hour": { "15": 1150, "16": 1950, "17": 2280, "18": 1700, "19": 900, "20": 450, "21": 210 }
+    },
+    {
+      "id": "g-b", "name": "Gate B",
+      "coordinates": [-112.0736, 33.4620],
+      "queue_zone": "z-plaza",
+      "staff_count": 6, "scheduled_open_hour": 15,
+      "arrivals_by_hour": { "15": 840, "16": 1450, "17": 1680, "18": 1240, "19": 660, "20": 330, "21": 150 }
+    },
+    {
+      "id": "g-c", "name": "Gate C",
+      "coordinates": [-112.0700, 33.4638],
+      "queue_zone": "z-lawn",
+      "staff_count": 4, "scheduled_open_hour": 16,
+      "arrivals_by_hour": { "15": 380, "16": 700, "17": 860, "18": 640, "19": 360, "20": 190, "21": 90 }
+    },
+    {
+      "id": "g-d", "name": "Gate D",
+      "coordinates": [-112.0784, 33.4646],
+      "queue_zone": "z-concourse",
+      "staff_count": 3, "scheduled_open_hour": 15,
+      "arrivals_by_hour": { "15": 420, "16": 760, "17": 900, "18": 660, "19": 340, "20": 170, "21": 80 }
+    }
+  ],
+
+  "service": {
+    "staff_per_lane": 2,
+    "service_rate_per_lane_per_min": 6.0,
+    "service_time_cv": 0.35,
+    "min_lanes_when_open": 1,
+    "_comment": "Six persons per lane per minute is a ten-second dwell: wanding plus a bag glance, two staff per lane. Service time is lognormal with CV 0.35 rather than deterministic, because a deterministic server under-reports queueing at high utilisation and that is exactly the regime this event runs in."
+  },
+
+  "limits": {
+    "gate_open_offsets_min": [0, -15, -30, -45],
+    "total_staff": 21,
+    "min_staff_per_gate": 2,
+    "max_staff_moves": 4,
+    "staff_block_minutes": 15,
+    "stagger_max_share": 0.20,
+    "stagger_offsets_min": [0, 15, 30],
+    "movable_resources": ["r-w1", "r-w2", "r-r1"],
+    "max_wait_increase_ratio": 1.10,
+    "_comment": "Every lever here is something a venue operations manager can actually authorise on the day. Nothing in the optimiser may propose a change outside these bounds; thermcue.optimise enforces it and tests assert it."
+  },
+
+  "resources": [
+    { "id": "r-w1", "type": "water", "name": "Water 1", "coordinates": [-112.0752, 33.4630], "zone": "z-plaza", "movable": true },
+    { "id": "r-w2", "type": "water", "name": "Water 2", "coordinates": [-112.0712, 33.4628], "zone": "z-lawn", "movable": true },
+    { "id": "r-w3", "type": "water", "name": "Water 3", "coordinates": [-112.0742, 33.4646], "zone": "z-concourse", "movable": false },
+    { "id": "r-r1", "type": "rest", "name": "Rest 1", "coordinates": [-112.0724, 33.4644], "zone": "z-concourse", "movable": true },
+    { "id": "r-r2", "type": "rest", "name": "Rest 2", "coordinates": [-112.0776, 33.4634], "zone": "z-west-queue", "movable": false }
+  ],
+
+  "zone_edges": [
+    { "from": "z-west-queue", "to": "z-plaza", "walk_minutes": 3 },
+    { "from": "z-plaza", "to": "z-lawn", "walk_minutes": 4 },
+    { "from": "z-plaza", "to": "z-concourse", "walk_minutes": 3 },
+    { "from": "z-concourse", "to": "z-lawn", "walk_minutes": 5 },
+    { "from": "z-concourse", "to": "z-staff", "walk_minutes": 4 }
+  ],
+
+  "validation_station": {
+    "name": "Phoenix Sky Harbor International Airport (KPHX)",
+    "coordinates": [-112.0116, 33.4373],
+    "source": "Open-Meteo point query at the KPHX coordinates, the single official station a conventional plan would be built on",
+    "_comment": "Roughly 4.5 km south-east of the venue. The Validation panel exists to show what a plan built on this one number would miss."
+  }
+}

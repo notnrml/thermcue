@@ -196,7 +196,11 @@ function PlanWorkspaceInner({ data }: PlanWorkspaceProps) {
   }, [simulating, toast]);
 
   return (
-    <div className="flex h-screen flex-col">
+    /* h-full, not h-screen: the workspace fills whatever height its parent
+     * gives it rather than assuming it owns the viewport. The page now docks a
+     * provenance strip beneath it, and with h-screen the workspace covered the
+     * full viewport and the strip rendered underneath the map. */
+    <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-[3]">
           <MapCanvas

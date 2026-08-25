@@ -1,0 +1,48 @@
+# ThermCue, both halves, from a clean clone:
+#
+#   cp engine/.env.example engine/.env   # add your keys, or leave blank
+#   docker compose up
+#
+# Engine on http://localhost:8000, web on http://localhost:3000.
+#
+# The engine runs without any key: it serves the full application and states on
+# /health and /thermal exactly which sources are missing and what that costs.
+
+services:
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Blank values are fine. The engine degrades declaredly rather than
+      # failing, which is what makes the zero-setup demo requirement possible.
+      FORTYGUARD_API_KEY: "${FORTYGUARD_API_KEY:-}"
+      FORTYGUARD_BASE_URL: "${FORTYGUARD_BASE_URL:-https://api.fortyguard.com}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      THERMCUE_OFFLINE: "${THERMCUE_OFFLINE:-0}"
+      THERMCUE_CORS_ORIGINS: "*"
+    volumes:
+      # Persisted so a rebuild does not discard cached FortyGuard responses and
+      # spend credits re-fetching them.
+      - ./engine/data/cache:/app/data/cache
+      - ./research:/research:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_ENGINE_URL: "http://localhost:8000"
+    depends_on:
+      engine:
+        condition: service_healthy
