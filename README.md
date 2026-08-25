@@ -59,9 +59,18 @@ when, and what it buys.
 | Agent demo trigger | `POST https://thermcue-engine.fly.dev/agent/trigger?zone_id=z-lawn&delta_c=3` |
 | One-page action card | https://thermcue-engine.fly.dev/export/pdf |
 
-No login, no installation. The engine serves the committed response cache, so the
-demo renders the same numbers this README quotes even if the FortyGuard API is
-unreachable during judging.
+No login, no installation.
+
+**The live demo and the documented numbers are related but not identical, and
+that is deliberate.** The deployment has a FortyGuard key and pulls a live
+forecast, so it shows conditions as they are now. The tables below are the
+*pinned* run: the committed response cache, reproducible from a clean clone with
+no key and no network. Both are honest; they answer different questions. The
+deployment answers "what does this venue look like today", the pin answers "can
+anyone reproduce what this README claims".
+
+If FortyGuard is unreachable during judging the deployment falls back to that
+same cache and the Live/Cached badge says so.
 
 The agent runs on **GPT-OSS 120B via Groq's free tier**, and every directive
 names the exact model that produced it. With no model key configured the engine
