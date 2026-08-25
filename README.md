@@ -63,12 +63,13 @@ No login, no installation. The engine serves the committed response cache, so th
 demo renders the same numbers this README quotes even if the FortyGuard API is
 unreachable during judging.
 
-**One caveat stated up front:** no Anthropic key is configured on the deployment,
-so the agent runs its deterministic path and labels itself `engine:
-"deterministic"` in every directive and in the console. It uses the same seven
+**One caveat stated up front:** no model key is configured on the deployment, so
+the agent runs its deterministic path and labels itself `engine: "deterministic"`
+in every directive, in the console and on `/health`. It uses the same seven
 tools, the same guardrails and the same numeric grounding; it is not the
-model-driven agent, and it does not pretend to be. Set `ANTHROPIC_API_KEY` on the
-engine and the same endpoint returns `engine: "anthropic"`.
+model-driven agent, and it does not pretend to be. Point it at any provider (see
+[Bringing your own model](#bringing-your-own-model)) and the same endpoint
+returns that model's name instead.
 
 ## Quickstart
 
@@ -90,7 +91,8 @@ Environment variables (all optional, all read from `engine/.env`):
 |---|---|---|
 | `FORTYGUARD_API_KEY` | tOS Enterprise API | No per-zone spatial signal or FortyGuard humidity. The response cache is committed, so the bundled demo still runs. |
 | `FORTYGUARD_BASE_URL` | API root | Defaults to `https://api.fortyguard.com` |
-| `ANTHROPIC_API_KEY` | The autonomous agent's model | Agent runs a deterministic path over the same tools, labelled `engine: "deterministic"` everywhere it surfaces. |
+| `THERMCUE_LLM_API_KEY` + `THERMCUE_LLM_PROVIDER` | The agent's model, any OpenAI-compatible provider | Agent runs a deterministic path over the same tools, labelled `engine: "deterministic"` everywhere it surfaces. |
+| `ANTHROPIC_API_KEY` | The agent's model, via Anthropic | As above |
 | `THERMCUE_OFFLINE` | Serve cache only, never open a socket | Live calls permitted |
 
 Running the engine directly:
@@ -103,6 +105,56 @@ uv venv --python 3.11 && uv pip install -e ".[dev]"
 ```
 
 ---
+
+## Bringing your own model
+
+**The hackathon does not supply model credits.** Participant benefits are
+FortyGuard Temperature API access, trial API credits, the quickstart, docs,
+Slack, technical support, a certificate and partner network access. All five
+entries in the event's Platform & API FAQ are about the Temperature API, and the
+submission form asks you to *disclose which AI tools you used* — which only makes
+sense if you brought them.
+
+So ThermCue is deliberately not tied to one model vendor. It speaks two
+protocols: Anthropic's Messages API, and **any OpenAI-compatible
+`/chat/completions` endpoint with tool calling**. The second covers every free
+tier worth having, so running the real agent costs nothing:
+
+| `THERMCUE_LLM_PROVIDER` | Default model | Free tier |
+|---|---|---|
+| `qwen` | `qwen-plus` | Alibaba DashScope free quota |
+| `groq` | `llama-3.3-70b-versatile` | Free tier, rate limited |
+| `openrouter` | `qwen/qwen-2.5-72b-instruct` | Free models available |
+| `cerebras` | `llama-3.3-70b` | Free tier |
+| `deepseek` | `deepseek-chat` | Paid, very cheap |
+| `together` | `Qwen/Qwen2.5-72B-Instruct-Turbo` | Trial credit |
+| `openai` | `gpt-4o-mini` | Paid |
+| `anthropic` | `claude-sonnet-4-5` | Paid |
+
+```bash
+# Any of the above. Two variables, nothing else changes.
+flyctl secrets set \
+  THERMCUE_LLM_PROVIDER=qwen \
+  THERMCUE_LLM_API_KEY=sk-... \
+  --app thermcue-engine
+```
+
+Anything not listed works too — set `THERMCUE_LLM_PROVIDER=openai` with
+`THERMCUE_LLM_BASE_URL` pointing at the endpoint.
+
+**The guardrails are protocol-independent.** Whichever model runs, every number
+in a published directive is extracted and checked against what the tools actually
+returned, and the directive is rejected if any figure is untraceable. A cheap
+model that hallucinates a WBGT reading is caught exactly as an expensive one
+would be, and `tests/test_agent_providers.py` asserts precisely that against a
+mocked provider. Free tiers are also less reliable about the tool contract than
+paid ones, so the OpenAI path defends against the three things they actually do —
+malformed tool arguments, content returned as parts rather than a string, and a
+reasoning block prepended to the answer — none of which relaxes the grounding
+check.
+
+Every directive publishes the model that produced it, so the disclosure the
+submission form asks for is a fact the system reports rather than a claim.
 
 ## Architecture
 

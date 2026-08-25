@@ -35,13 +35,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
+import httpx
+
 from .agent_prompts import (
     DIRECTIVE_INSTRUCTION,
     PROMPT_VERSION,
     SYSTEM_PROMPT,
     TRIGGER_NOTE,
 )
-from .config import Settings, get_settings
+from .config import LlmConfig, Settings, get_settings
 from .models import AgentFeedEntry, ToolTrace
 from .optimise import OptimisationResult, run_full_optimisation
 from .plan import Plan
@@ -54,6 +56,11 @@ BAND_ORDER = ["low", "moderate", "high", "extreme"]
 
 #: How far ahead a band change must fall to justify replanning, per the brief.
 REPLAN_HORIZON_HOURS = 3
+
+MAX_TOOL_ROUNDS = 8
+"""Cap on tool-calling rounds before the agent is asked to commit to a
+directive. A model that keeps calling tools forever is a stuck agent, not a
+thorough one."""
 
 #: Tolerance for matching a number in generated text against a tool output.
 #: Generous enough to allow the model to quote a rounded figure, tight enough
@@ -608,7 +615,7 @@ class ThermCueAgent:
         if perturbation:
             tools.perturbation = dict(perturbation)
 
-        if self.settings.has_anthropic_key:
+        if self.settings.has_model:
             try:
                 return await self._publish(await self._decide_with_model(tools, bool(perturbation)))
             except DirectiveRejected as exc:
@@ -627,7 +634,7 @@ class ThermCueAgent:
                             f"path below."
                         ),
                         tool_calls=tools.calls,
-                        engine="anthropic",
+                        engine=self._engine_label(),
                         grounded=False,
                     )
                 )
@@ -639,62 +646,34 @@ class ThermCueAgent:
                         tag="MONITOR",
                         text=f"Agent model call failed: {type(exc).__name__}: {exc}",
                         tool_calls=tools.calls,
-                        engine="anthropic",
+                        engine=self._engine_label(),
                         grounded=False,
                     )
                 )
 
         return await self._publish(await self._decide_deterministically(tools))
 
+    def _engine_label(self) -> str:
+        """What produced a directive, published with it.
+
+        Never just "llm". A reader of the console must be able to see which model
+        wrote a directive, because a Qwen directive and a Claude directive are
+        different artefacts and the submission has to disclose which was used.
+        """
+        try:
+            llm = self.settings.llm
+        except ValueError:
+            return "misconfigured"
+        return llm.label if llm else "deterministic"
+
     async def _decide_with_model(self, tools: AgentTools, triggered: bool) -> Directive:
-        """Tool-calling loop against the Anthropic API."""
-        from anthropic import AsyncAnthropic
-
-        client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": (TRIGGER_NOTE if triggered else "")
-                + "Assess the current plan and decide whether to act.",
-            }
-        ]
-
-        for _ in range(8):
-            response = await client.messages.create(
-                model=self.settings.agent_model,
-                max_tokens=self.settings.agent_max_tokens,
-                temperature=self.settings.agent_temperature,
-                system=SYSTEM_PROMPT,
-                tools=tools.schema(),
-                messages=messages,
-            )
-            messages.append({"role": "assistant", "content": response.content})
-            tool_uses = [b for b in response.content if getattr(b, "type", "") == "tool_use"]
-            if not tool_uses:
-                break
-            results = []
-            for block in tool_uses:
-                output = await tools.dispatch(block.name, dict(block.input or {}))
-                results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(output, default=str)[:8000],
-                    }
-                )
-            messages.append({"role": "user", "content": results})
-
-        messages.append({"role": "user", "content": DIRECTIVE_INSTRUCTION})
-        final = await client.messages.create(
-            model=self.settings.agent_model,
-            max_tokens=512,
-            temperature=self.settings.agent_temperature,
-            system=SYSTEM_PROMPT,
-            messages=messages,
-        )
-        text = "".join(
-            getattr(block, "text", "") for block in final.content if getattr(block, "type", "") == "text"
-        ).strip()
+        """Tool-calling loop against whichever model provider is configured."""
+        llm = self.settings.llm
+        assert llm is not None
+        if llm.protocol == "anthropic":
+            text = await self._run_anthropic(llm, tools, triggered)
+        else:
+            text = await self._run_openai_compatible(llm, tools, triggered)
 
         ungrounded = ground_numbers(text, collect_tool_numbers(tools.calls))
         if ungrounded:
@@ -713,11 +692,188 @@ class ThermCueAgent:
             tag=tag,
             text=text,
             tool_calls=tools.calls,
-            engine="anthropic",
+            engine=llm.label,
         )
 
+    async def _run_anthropic(
+        self, llm: "LlmConfig", tools: AgentTools, triggered: bool
+    ) -> str:
+        """Anthropic Messages API with native tool use."""
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=llm.api_key, base_url=llm.base_url)
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "user",
+                "content": (TRIGGER_NOTE if triggered else "")
+                + "Assess the current plan and decide whether to act.",
+            }
+        ]
+
+        for _ in range(MAX_TOOL_ROUNDS):
+            response = await client.messages.create(
+                model=llm.model,
+                max_tokens=self.settings.agent_max_tokens,
+                temperature=self.settings.agent_temperature,
+                system=SYSTEM_PROMPT,
+                tools=tools.schema(),
+                messages=messages,
+            )
+            messages.append({"role": "assistant", "content": response.content})
+            tool_uses = [b for b in response.content if getattr(b, "type", "") == "tool_use"]
+            if not tool_uses:
+                break
+            results = []
+            for block in tool_uses:
+                output = await tools.dispatch(block.name, dict(block.input or {}))
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": _trace_json(output),
+                    }
+                )
+            messages.append({"role": "user", "content": results})
+
+        messages.append({"role": "user", "content": DIRECTIVE_INSTRUCTION})
+        final = await client.messages.create(
+            model=llm.model,
+            max_tokens=512,
+            temperature=self.settings.agent_temperature,
+            system=SYSTEM_PROMPT,
+            messages=messages,
+        )
+        return "".join(
+            getattr(b, "text", "") for b in final.content if getattr(b, "type", "") == "text"
+        ).strip()
+
+    async def _run_openai_compatible(
+        self, llm: "LlmConfig", tools: AgentTools, triggered: bool
+    ) -> str:
+        """OpenAI /chat/completions with tool calling.
+
+        One implementation covers Qwen, Groq, OpenRouter, Cerebras, DeepSeek,
+        Together and OpenAI itself, because they all speak this protocol. Written
+        against httpx rather than the ``openai`` package: the surface used here is
+        one endpoint, and a second SDK is a second thing to keep current.
+
+        Free tiers are noticeably less reliable than paid ones about the tool
+        contract, so this is defensive in three specific places, each marked
+        below. None of them relaxes the grounding check - a sloppy model gets its
+        directive rejected exactly like a careful one would.
+        """
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (TRIGGER_NOTE if triggered else "")
+                + "Assess the current plan and decide whether to act.",
+            },
+        ]
+        openai_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t["description"],
+                    "parameters": t["input_schema"],
+                },
+            }
+            for t in tools.schema()
+        ]
+
+        async with httpx.AsyncClient(
+            base_url=llm.base_url,
+            timeout=httpx.Timeout(self.settings.agent_request_timeout_s),
+            headers={
+                "Authorization": f"Bearer {llm.api_key}",
+                "Content-Type": "application/json",
+            },
+        ) as client:
+
+            async def complete(body: dict[str, Any]) -> dict[str, Any]:
+                response = await client.post("/chat/completions", json=body)
+                if response.status_code >= 400:
+                    raise RuntimeError(
+                        f"{llm.label} returned {response.status_code}: {response.text[:400]}"
+                    )
+                return response.json()
+
+            for _ in range(MAX_TOOL_ROUNDS):
+                body = await complete(
+                    {
+                        "model": llm.model,
+                        "messages": messages,
+                        "tools": openai_tools,
+                        "tool_choice": "auto",
+                        "temperature": self.settings.agent_temperature,
+                        "max_tokens": self.settings.agent_max_tokens,
+                    }
+                )
+                choice = (body.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                calls = message.get("tool_calls") or []
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content") or "",
+                        **({"tool_calls": calls} if calls else {}),
+                    }
+                )
+                if not calls:
+                    break
+                for call in calls:
+                    function = call.get("function") or {}
+                    name = function.get("name") or ""
+                    # Defensive 1: arguments arrive as a JSON *string*, and free
+                    # tiers sometimes send an empty string or malformed JSON for
+                    # a no-argument tool. Treat that as no arguments rather than
+                    # failing the whole run.
+                    try:
+                        arguments = json.loads(function.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        arguments = {}
+                    if not isinstance(arguments, dict):
+                        arguments = {}
+                    output = await tools.dispatch(name, arguments)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id") or name,
+                            "name": name,
+                            "content": _trace_json(output),
+                        }
+                    )
+
+            messages.append({"role": "user", "content": DIRECTIVE_INSTRUCTION})
+            body = await complete(
+                {
+                    "model": llm.model,
+                    "messages": messages,
+                    "temperature": self.settings.agent_temperature,
+                    "max_tokens": 512,
+                }
+            )
+            message = ((body.get("choices") or [{}])[0].get("message") or {})
+            content = message.get("content") or ""
+            # Defensive 2: some providers return content as a list of parts
+            # rather than a string.
+            if isinstance(content, list):
+                content = "".join(
+                    part.get("text", "") for part in content if isinstance(part, dict)
+                )
+            # Defensive 3: reasoning models prepend a think block. The directive
+            # is the last non-empty line that carries the tag separator.
+            text = str(content).strip()
+            if "</think>" in text:
+                text = text.split("</think>", 1)[1].strip()
+            for line in reversed([l.strip() for l in text.splitlines() if l.strip()]):
+                if "|" in line:
+                    return line
+            return text
+
     async def _decide_deterministically(self, tools: AgentTools) -> Directive:
-        """The no-key path: same tools, same guardrails, templated language.
+        """The no-model path: same tools, same guardrails, templated language.
 
         Labelled ``deterministic`` everywhere it surfaces. It is not the agent
         and must never be presented as one.

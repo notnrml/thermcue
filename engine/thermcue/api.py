@@ -362,6 +362,8 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "version": __version__,
         "fortyguard_key_configured": settings.has_fortyguard_key,
+        "model_configured": settings.has_model,
+        "model_provider": (settings.llm.label if settings.has_model else None),
         "anthropic_key_configured": settings.has_anthropic_key,
         "offline_mode": settings.offline,
     }
