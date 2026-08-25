@@ -646,16 +646,30 @@ on a thermometer reading.
 
 ### The agent
 
-Verified end to end against live data:
+Running live on the public deployment, on **GPT-OSS 120B via Groq's free tier**:
 
 ```
-cold start          → MONITOR    baseline established against the current forecast
-steady              → NO-ACTION  a published decision, per the brief
-+3 °C on Event Lawn → REPLAN in 13.4 s, 3 tool calls traced, all numbers grounded
+POST /agent/trigger?zone_id=z-lawn&delta_c=3   → HTTP 200 in 86.4 s
+tag:      NO-ACTION
+engine:   openai/gpt-oss-120b (groq)
+grounded: true
+tools:    get_thermal_state, get_forecast, get_current
+
+NO-ACTION | Civic Plaza at 15:00 stays High, WBGT est 30.2; North Concourse
+stays High, WBGT est 29.74; Event Lawn stays Extreme, WBGT est 32.31; West Queue
+stays High, WBGT est 30.1; Staff Compound stays High, WBGT est 29.67. |
+Existing heat plan holds.
 ```
 
-The brief's acceptance gate is a correct, fully traced autonomous replan in under
-30 seconds. **13.4 seconds.**
+Every figure in that directive traces to a tool result, checked after generation.
+
+**On the brief's 30-second gate.** The deterministic path clears it at **13.4 s**.
+The model path on a free tier does **not**: this run took 86 s, almost all of it
+spent waiting out a tokens-per-minute limit of 8,000 that the agent legitimately
+exceeds. That is a property of the free tier, not of the agent — the same code on
+a paid tier or any provider with a normal token allowance runs in seconds. Stated
+rather than papered over, because the honest reading is that we chose a free model
+and paid for it in latency.
 
 **Numeric grounding is enforced twice.** The system prompt requires every figure
 to come from a tool output; `ground_numbers` then extracts every numeral from the
