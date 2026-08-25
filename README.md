@@ -57,7 +57,7 @@ Environment variables (all optional, all read from `engine/.env`):
 
 | Variable | Purpose | Without it |
 |---|---|---|
-| `FORTYGUARD_API_KEY` | tOS Enterprise API | No per-zone spatial signal. Every zone reports the venue-level forecast. |
+| `FORTYGUARD_API_KEY` | tOS Enterprise API | No per-zone spatial signal or FortyGuard humidity. The response cache is committed, so the bundled demo still runs. |
 | `FORTYGUARD_BASE_URL` | API root | Defaults to `https://api.fortyguard.com` |
 | `ANTHROPIC_API_KEY` | The autonomous agent's model | Agent runs a deterministic path over the same tools, labelled `engine: "deterministic"` everywhere it surfaces. |
 | `THERMCUE_OFFLINE` | Serve cache only, never open a socket | Live calls permitted |
@@ -167,18 +167,70 @@ T[zone][hour] = venue_forecast[hour] + zone_offset[zone][hour]
 `zone_offset` is measured on an **analogue day**: the recent real date whose
 observed venue temperature curve most closely matches the event-day forecast,
 matched across the event hours only (matching over 24 h lets a good overnight
-fit disguise a bad afternoon one). For the demo date the analogue is
-**2026-07-14 at RMS 0.51 °C**, which the API payload and the UI both state.
+fit disguise a bad afternoon one). At the time of writing the analogue is
+**2026-07-19 at RMS 0.47 °C**, which the API payload and the UI both state.
 
-This is not a workaround that sidelines the sponsor. It makes FortyGuard's
-contribution precise: the claim is not that we predict tomorrow's air
-temperature better than the weather service — nobody needs that — but that the
-venue is not one temperature, and **every number in that claim is FortyGuard's**.
+### What we then measured, and what it changed
+
+Having built the composition, we measured what FortyGuard's spatial signal
+actually is at venue scale. The answer was not what the plan assumed, and it
+improved the product. `engine/scripts/scale_experiment.py` reproduces all of it.
+
+**Temperature spread against area of interest** — Phoenix, 2026-08-14 17:00,
+`tcm` at 60 m:
+
+| AOI | Area | Tiles | Spread | σ |
+|---|---:|---:|---:|---:|
+| 0.7 × 0.7 km | 0.5 km² | 90 | **0.044 °C** | 0.013 |
+| 1.5 × 1.5 km | 2.2 km² | 621 | 0.094 °C | 0.026 |
+| 3.0 × 3.0 km | 9.0 km² | 2,268 | 0.144 °C | 0.039 |
+| 6.0 × 6.0 km | 36 km² | 10,016 | 0.277 °C | 0.052 |
+| 12 × 12 km | 144 km² | 39,949 | **0.632 °C** | 0.103 |
+
+**Separation between Phoenix sites**, same hour:
+
+| Site | Separation | Mean |
+|---|---:|---:|
+| Venue (Hance Park) | — | 37.770 °C |
+| Downtown core | 0.9 km | 37.793 °C |
+| Sky Harbor airport | 4.5 km | 37.714 °C |
+| South Mountain Park | 12 km | **35.373 °C** |
+
+And over the venue footprint the `exceedance` and `persistence` layers return
+**min equal to max across all 140 cells** — no variation whatsoever.
+
+**Air temperature is well mixed at venue scale.** This is not a FortyGuard
+failure; the vendor's own README states that below city scale the temperature
+snapshot is nearly flat, and it is a physical property of air. FortyGuard's
+discriminating power is real and large — it separates the venue from South
+Mountain Park by 2.42 °C — but its length scale is **kilometres, not hundreds of
+metres**.
+
+Two consequences, both of which made the engine better:
+
+1. **Intra-venue heat differences are radiant, not advective.** If air
+   temperature is uniform across a site but one corner of it still puts people
+   down, the difference is in the radiant load: sun, surface, shade. That is
+   precisely why the operational index has to be **WBGT and not air
+   temperature**, and it is why the shade model earns its place. Measured on this
+   site at 15:00: air temperature varies **0.00 °C** between zones while WBGT
+   varies **0.39 °C**, driven entirely by shaded fraction ranging 0.32 to 0.59.
+   An order of magnitude more signal, from the term air temperature cannot see.
+2. **FortyGuard's real contribution here is the absolute thermal state and the
+   district-scale field**: the anchor temperature, the humidity series, the
+   irradiance, and the ability to say *which part of a city* to site an event in.
+   That is a venue-siting and planning signal, and it is the honest frame.
+
+An earlier version of this README claimed a 13-point improvement attributable to
+per-zone FortyGuard offsets. That experiment injected offsets of ±1.6 °C, which
+is roughly **forty times** what FortyGuard returns at this scale. It has been
+deleted and replaced by the measurement above. The finding it was reaching for
+was real; the number was not.
 
 ### A real request and response
 
-Captured live by `engine/scripts/verify_api.py`, which writes the verbatim pair
-with the key redacted to [`docs/fortyguard_exchange.md`](docs/fortyguard_exchange.md).
+Captured live by `engine/scripts/verify_api.py`, verbatim with the key redacted,
+in [`docs/fortyguard_exchange.md`](docs/fortyguard_exchange.md).
 
 **Request**
 
@@ -197,20 +249,20 @@ Content-Type: application/json
       "geometry": {
         "type": "Polygon",
         "coordinates": [[
-          [-112.0800, 33.4610], [-112.0685, 33.4610],
-          [-112.0685, 33.4665], [-112.0800, 33.4665],
-          [-112.0800, 33.4610]
+          [-112.08, 33.461], [-112.0685, 33.461],
+          [-112.0685, 33.4665], [-112.08, 33.4665],
+          [-112.08, 33.461]
         ]]
       }
     }]
   },
-  "date_time": {"start_date": "2026-07-14", "filter_type": 1, "start_time": "17:00"},
+  "date_time": {"start_date": "2026-07-19", "filter_type": 1, "start_time": "18:00"},
   "granularity": 60,
   "analytic_type": "tcm"
 }
 ```
 
-**Response** (tiles truncated — the full body is several megabytes of GeoJSON)
+**Response** (140 tiles, truncated to two)
 
 ```json
 {
@@ -218,7 +270,6 @@ Content-Type: application/json
   "status_code": 200,
   "message": "Success",
   "data": {
-    "activity_id": "<activity id>",
     "status": "Completed",
     "result": {
       "map_data": {
@@ -228,17 +279,18 @@ Content-Type: application/json
           "type": "Feature",
           "properties": {
             "tile_id": 0,
-            "average_temperature": 44.31,
-            "min_temperature": 41.02,
-            "max_temperature": 47.85
+            "average_temperature": 32.82,
+            "min_temperature": 32.82,
+            "max_temperature": 32.82
           },
-          "geometry": {"type": "Polygon", "coordinates": [[[-112.0800, 33.4610], "..."]]}
-        }]
+          "geometry": {"type": "Polygon", "coordinates": ["..."]}
+        }],
+        "_truncated": "138 further tiles omitted"
       },
       "stats_data": {
         "temperature_stats": {
-          "minimum": 41.02, "maximum": 47.85,
-          "mean": 44.19, "standard_deviation": 1.31
+          "minimum": 32.7788, "maximum": 32.8202,
+          "mean": 32.79939, "standard_deviation": 0.013085624491988749
         }
       }
     }
@@ -246,13 +298,13 @@ Content-Type: application/json
 }
 ```
 
-> **This block is illustrative until the hackathon key is configured.** The
-> request body is exactly what the engine sends; the response is the documented
-> schema with representative values. Run `verify_api.py` once the key is in
-> place and it overwrites `docs/fortyguard_exchange.md` with the live exchange.
-> Everything else in this README is measured output, quoted verbatim.
+That `standard_deviation` of **0.013 °C across 140 tiles** is the measurement
+that reframed the product.
 
----
+**Credit usage.** The hackathon key carries 2,000,000 credits. Every call is
+logged per endpoint from the first one and exposed at `GET /credits`; building
+the full demo cache plus the entire scale experiment cost well under 1 % of the
+allocation.
 
 ## The science, and its limits
 
@@ -338,74 +390,95 @@ artefact of the weights, and the evidence ships either way.
 
 ## Results
 
-All figures below are measured output from this repository, reproducible from
-seed `20260829`.
+Every figure below is measured output from this repository, reproducible from
+seed `20260829`, and regenerated by `engine/scripts/headline.py` into
+[`docs/headline.md`](docs/headline.md) with the timestamp it was measured at.
+
+> **Read the timestamp.** These numbers depend on a live forecast for an event
+> four days out, and that forecast moves. It moved 2 °C cooler during a single
+> day of development, which took the venue from five High-band zone-hours to
+> none and cut heat-weighted exposure by a factor of four. That is the product
+> behaving correctly and it is exactly what the agent's replanning trigger
+> exists for, but it means an untimestamped number is false within hours.
 
 ### The headline
 
+Measured 2026-08-25 05:12 UTC. Peak forecast air temperature **37.9 °C at
+18:00**; band census across the 35 zone-hours is **24 Low, 11 Moderate**.
+
 | | Baseline | ThermCue plan | Change |
 |---|---:|---:|---:|
-| Heat-weighted person-minutes | 940,762 | 758,561 | **−19.4 %** |
-| Person-minutes in High/Extreme | 38,430 | 21,411 | −44.3 % |
-| Total wait (person-minutes) | 902,332 | 732,372 | **−18.3 %** |
-| Longest single wait | 199 min | 135 min | −32.2 % |
+| Heat-weighted person-minutes | 199,010 | 123,118 | **−38.1 %** |
+| Person-minutes in High/Extreme | 0 | 0 | — |
+| Total wait (person-minutes) | 902,332 | 779,980 | **−13.6 %** |
+| Longest single wait | 199 min | 166 min | −16.6 % |
 
-Heat exposure and total wait both fall. The brief's acceptance gate was ≥20 % HPM
-reduction at ≤10 % wait increase; this clears the wait side comfortably and sits
-**just under** the heat side. The reason is the most interesting result in the
-project.
+2,694 candidate plans were simulated to produce that. The brief's acceptance gate
+was ≥20 % HPM reduction at ≤10 % wait increase: **both clear**, and wait falls
+rather than rises.
 
-### Why 19.4 % and not more: the spatial-signal experiment
+**The honest caveat on this particular run.** On the current forecast no zone-hour
+reaches the High or Extreme band, so `person_minutes_high_extreme` is zero on both
+sides and the heat-weighted metric is separating Moderate from Low rather than
+Extreme from Low. The plan is still better on the metric, but this is a mild day
+by Phoenix standards. On the hotter forecast this scenario was developed against,
+the same code produced a 19.4 % reduction with 38,430 baseline person-minutes in
+High/Extreme falling to 21,411. Both are real; neither is the number to quote
+without saying which forecast it came from.
 
-`engine/scripts/spatial_signal_experiment.py` runs the full optimisation twice on
-the same day, same arrivals, same limits, changing exactly one thing.
-
-| | Intra-venue WBGT spread | Bands in play | HPM reduction |
-|---|---:|---|---:|
-| **No spatial signal** (no API key) | 0.80 °C | 2 of 4 | +17.6 % |
-| **With per-zone offsets** | 2.87 °C | 4 of 4 | **+30.7 %** |
-
-**Headroom attributable to the spatial signal: +13.1 percentage points.**
-
-The metric rewards moving queues from hot zones to cooler ones, so its headroom
-is bounded by how much the zones actually differ. A uniformly hot venue has
-nowhere cooler to send anyone. That structure is precisely what FortyGuard
-supplies at 60 m and what a single station cannot — and the engine as deployed is
-currently running **without a key**, which is why the demo number sits where it
-does. Configure the key and the same code clears the gate.
-
-This is the product thesis under test rather than asserted.
-
-### What the optimiser actually recommends
+### What the optimiser recommends
 
 | Share | Change |
 |---:|---|
-| 23.6 % | Move 3 staff from Gate A (8 → 5) |
-| 23.6 % | Move 2 staff from Gate C (4 → 2) |
-| 22.6 % | Move 2 staff to Gate A (8 → 10) |
-| 15.9 % | Open Gate C 45 minutes early |
-| 9.6 % | Move 5 staff to Gate D (3 → 8) |
-| 4.8 % | Stagger 20 % of arrivals by 30 minutes |
+| 33.1 % | Move 4 staff from Gate A (8 → 4) |
+| 33.1 % | Move 2 staff from Gate C (4 → 2) |
+| 19.5 % | Open Gate C 45 minutes early |
+| 9.6 % | Stagger 20 % of arrivals by 30 minutes |
+| 4.8 % | Move 2 staff to Gate A (8 → 10) |
+| 0.0 % | Move 5 staff to Gate D (3 → 8) |
+
+Plus three relief relocations, scored against relief coverage rather than HPM.
 
 Shares come from **leave-one-out counterfactuals** — each change is removed from
 the winning plan on its own and the plan re-simulated — not from an attribution
 heuristic. Raw HPM deltas are reported alongside, because leave-one-out
-contributions do not sum to the total when levers interact and rescaling them
+contributions do not sum to the total when levers interact, and rescaling them
 silently would hide exactly that interaction.
+
+### Metric defence, and when it is worthless
+
+`/optimise` ships a weight-sensitivity table that reruns the headline comparison
+under four alternative band weightings. On the current forecast **all four agree
+exactly, and that agreement is worthless**: with only Low and Moderate bands
+occurring, every variant assigns those the same 0 and 1, so identical results are
+arithmetic rather than confirmation. `docs/headline.md` says so in place of the
+table whenever the upper bands are unexercised. On a forecast that reaches High
+and Extreme the check has teeth, and a test asserts the winning plan still wins
+under all four.
+
+### Validation against the single station
+
+Maximum intra-venue air-temperature spread is **0.09 °C** — consistent with the
+scale measurement above, and an honest result rather than a flattering one. But
+**9 zone-hours disagree with Sky Harbor on band**, because band assignment runs
+on WBGT, and WBGT carries the shade term the station has no way to see:
+
+> Civic Plaza reads Low band at 18:00 while Phoenix Sky Harbor International
+> Airport reads Moderate. A plan built on the station alone would not trigger any
+> action there.
+
+That is the sponsor-hero result, and it survives the flat temperature field
+precisely because the product indexes on WBGT rather than air temperature.
 
 ### The agent
 
 Verified end to end against live data:
 
 ```
-cold start   → MONITOR    baseline established against the current forecast
-steady       → NO-ACTION  a published decision, per the brief
-+2 °C on Event Lawn → REPLAN in 13.4 s, 3 tool calls traced, all numbers grounded
+cold start          → MONITOR    baseline established against the current forecast
+steady              → NO-ACTION  a published decision, per the brief
++3 °C on Event Lawn → REPLAN in 13.4 s, 3 tool calls traced, all numbers grounded
 ```
-
-> **REPLAN** | Event Lawn crosses high at 16:00, WBGT est 30.91. Open Gate C 45
-> minutes early; Stagger 20 % of arrivals by 30 minutes. | Heat-weighted
-> exposure falls 21.4 % for a −13.7 % change in total wait.
 
 The brief's acceptance gate is a correct, fully traced autonomous replan in under
 30 seconds. **13.4 seconds.**
@@ -422,23 +495,35 @@ The replanning trigger diffs against **the plan's underlying forecast**, not
 against band transitions inside one forecast. The first implementation did the
 latter and produced NO-ACTION on the demo trigger: at this venue heat peaks in
 the first event hour and declines all evening, so there is never an hour-over-hour
-escalation, and an agent watching for one would sit silent through a revision
-that moved a whole zone into Extreme.
+escalation, and an agent watching for one would sit silent through a revision that
+moved a whole zone into Extreme.
 
-### The Pareto frontier is flat
+### Two structural findings
 
-At every wait allowance from 1.00× to 1.20× baseline, the best plan is the same
-plan. The optimum needs no extra wait budget at all. That is a real finding about
-this scenario, not a missing sweep, and the API says so in its notes.
+**The Pareto frontier is flat.** At every wait allowance from 1.00× to 1.20×
+baseline, the best plan is the same plan. The optimum needs no extra wait budget
+at all. That is a real finding about this scenario, not a missing sweep, and the
+API says so in its notes.
 
-### You cannot staff your way out of a heat problem
+**You cannot staff your way out of a heat problem.** Offered on its own, every
+CP-SAT staffing proposal is rejected by the search. With headcount fixed at 21
+and the baseline allocation already near-proportional to demand, reallocation
+cannot create throughput — it can only move a queue from one gate to another. The
+wins are in the timing levers, which cost nothing.
 
-Every CP-SAT staffing proposal is rejected by the search when offered on its own.
-With headcount fixed at 21 and the baseline allocation already near-proportional
-to demand, reallocation cannot create throughput — it can only move a queue from
-one gate to another. The wins are in the timing levers, which cost nothing.
+### Offline verification
 
----
+The submission checklist asks for the cache fallback to be verified with
+networking disabled. The response cache is committed, so:
+
+```
+THERMCUE_OFFLINE=1 FORTYGUARD_API_KEY= ...
+freshness: cached | spatial signal: True | zone-hours: 35
+HPM 199,010 -> 123,118 (+38.13%)
+OFFLINE FALLBACK: PASS
+```
+
+Identical numbers, no socket opened.
 
 ## Track mapping
 
@@ -446,7 +531,7 @@ one gate to another. The wins are in the timing levers, which cost nothing.
 |---|---|
 | **Agentic** (primary) | `agent.py` — an autonomous tool-calling loop over seven engine capabilities, publishing directives to a WebSocket console on a timer and on trigger with no human in the path. Every published number is validated against tool output after generation, not merely requested in a prompt. |
 | **Resilient Cities** | The unit of analysis is a real operating decision under heat stress with real constraints. Outputs are a radio-ready action card and a calendar file, not a dashboard. |
-| **Data Analysis & Correlation** | The spatial-signal experiment quantifies how much optimisation headroom the hyperlocal signal creates (+13.1 pp). Workstream 3 correlates FortyGuard hyperlocal temperature against independent satellite-derived surface structure. |
+| **Data Analysis & Correlation** | `scale_experiment.py` measures the length scale at which FortyGuard resolves a temperature difference, across five areas of interest and four Phoenix sites, and reports the negative result at venue scale as readily as the positive one at city scale. Workstream 3 correlates FortyGuard hyperlocal temperature against independent satellite-derived surface structure. |
 
 ---
 
@@ -457,12 +542,19 @@ find.
 
 **Data and provenance**
 
-- **No FortyGuard key is configured on the current deployment**, so per-zone
-  offsets are zero and every zone reports the venue-level forecast. `/health` and
-  `/thermal` both say so. This costs about 13 percentage points of demonstrated
-  improvement — see the spatial-signal experiment.
+- **FortyGuard's per-zone offsets at this venue are ±0.05 °C**, which is
+  measurement noise, not structure. The engine applies them faithfully and the
+  payload reports them; they are not doing meaningful work. What differentiates
+  zones here is shade, and that comes from computed geometry rather than from
+  FortyGuard. See the scale experiment.
 - FortyGuard has no forecast, so the forward view is a composition. The analogue
   day, its RMS error and its match quality are in every payload.
+- **Results move with the forecast.** The event is four days out at the time of
+  writing. Quote `docs/headline.md` with its timestamp, or regenerate it.
+- On the current forecast the venue never reaches the High or Extreme band, so
+  the heat-weighted metric separates Moderate from Low rather than Extreme from
+  Low, and the weight-sensitivity check is arithmetically vacuous. Both are
+  stated wherever the numbers appear.
 - Zone offsets assume the venue's *spatial* structure is stable between two days
   of similar weather. The absolute level is not assumed stable; it comes from the
   forecast.
@@ -513,7 +605,7 @@ thermcue/
 ├── engine/              Python 3.11, FastAPI — Workstream 2
 │   ├── thermcue/        client · thermal · shade · simulate · optimise · agent
 │   ├── data/            scenario_phoenix.json, response cache
-│   ├── scripts/         verify_api · build_cache · spatial_signal_experiment
+│   ├── scripts/         verify_api · build_cache · scale_experiment · headline
 │   └── tests/           131 tests
 ├── web/                 Next.js 14, TypeScript, Tailwind, MapLibre — Workstream 1
 ├── research/            Workstream 3 outputs (read-only to the engine)
@@ -541,7 +633,7 @@ thermcue/
 
 ```bash
 cd engine && .venv/bin/python -m pytest tests/ -q
-# 131 passed
+# 131 passed in 289s
 ```
 
 Coverage is aimed at the failure modes that would mislead a judge: conservation

@@ -5,6 +5,12 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 outputs/
-data/cache/*.json
-data/cache/*.jsonl
-!data/cache/.gitkeep
+
+# The response cache is committed on purpose. The judging requirement is a
+# public demo that works with zero setup, and the submission checklist asks for
+# the cache fallback to be verified with networking disabled. Committing it also
+# pins the demo to the same forecast the quoted results were measured against,
+# so the deployed app and docs/headline.md cannot drift apart.
+#
+# The credit ledger is local accounting, not part of the demo.
+data/cache/credit_ledger.jsonl

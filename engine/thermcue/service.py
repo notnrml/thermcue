@@ -331,7 +331,14 @@ async def build_thermal_bundle(
                         f"fortyguard:/v1/heatmap tcm {HEATMAP_GRANULARITY_M} m on "
                         f"{analogue.date}"
                     )
-                peak_hour = max(venue.hours, key=lambda h: h.t_air_c)
+                # Anchor on the hottest hour **inside the event window**, not
+                # across the whole day. Open-Meteo's 00:00 value can be a model
+                # artefact carried over from the previous day - for the scenario
+                # date it returns 38.7 C at midnight against 28.7 C at 04:00,
+                # which is not a physical Phoenix overnight - and anchoring on it
+                # sends env_params a temperature the event never sees.
+                event_hours = [h for h in venue.hours if h.hour in scenario.hours]
+                peak_hour = max(event_hours or venue.hours, key=lambda h: h.t_air_c)
                 humidity, fortyguard_ghi, env_notes = await fetch_humidity_and_solar(
                     scenario, analogue, peak_hour.t_air_c, client
                 )
@@ -423,7 +430,8 @@ async def build_thermal_bundle(
             "field."
         )
 
-    peak = max(venue.hours, key=lambda h: h.solar_ghi_wm2)
+    sunny_hours = [h for h in venue.hours if h.hour in scenario.hours] or list(venue.hours)
+    peak = max(sunny_hours, key=lambda h: h.solar_ghi_wm2)
     notes.append(
         f"Modelled shade benefit at the sunniest hour ({peak.hour:02d}:00) is "
         f"{shade_delta_c(peak.t_air_c, humidity.get(peak.hour, peak.rh_pct), wind_at_globe_height(peak.wind_10m_ms), peak.solar_ghi_wm2):+.2f} C "
