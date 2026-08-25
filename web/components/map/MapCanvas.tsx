@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Map, { Layer, Marker, Source } from "react-map-gl/maplibre";
 import type { Map as MaplibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -37,28 +37,44 @@ interface MapCanvasProps {
   onResourceMove: (id: string, coordinates: LngLat) => void;
 }
 
-/** Reads token colours from CSS variables so map paint stays on the palette. */
+/** Reads token colours from CSS variables so map paint stays on the palette.
+ *
+ * Read once, lazily, on first render rather than in an effect. This component is
+ * imported with `ssr: false`, so the document exists by the time it mounts and
+ * there is nothing to wait for. Setting state from an effect meant one extra
+ * render with `colors` null on every mount, which Next 16's
+ * `react-hooks/set-state-in-effect` rule flags and which was already costing the
+ * map a paint it did not need.
+ */
+const TOKEN_NAMES = {
+  low: "--wbgt-low",
+  moderate: "--wbgt-moderate",
+  high: "--wbgt-high",
+  extreme: "--wbgt-extreme",
+  border: "--base-border",
+  shade: "--base-secondary",
+  heat1: "--heat-1",
+  heat2: "--heat-2",
+  heat3: "--heat-3",
+  heat4: "--heat-4",
+  heat5: "--heat-5",
+  heat6: "--heat-6",
+  heat7: "--heat-7",
+} as const;
+
+function readTokenColors(): Record<string, string> | null {
+  if (typeof document === "undefined") return null;
+  const style = getComputedStyle(document.documentElement);
+  return Object.fromEntries(
+    Object.entries(TOKEN_NAMES).map(([key, variable]) => [
+      key,
+      style.getPropertyValue(variable).trim(),
+    ]),
+  );
+}
+
 function useTokenColors() {
-  const [colors, setColors] = useState<Record<string, string> | null>(null);
-  useEffect(() => {
-    const style = getComputedStyle(document.documentElement);
-    const read = (name: string) => style.getPropertyValue(name).trim();
-    setColors({
-      low: read("--wbgt-low"),
-      moderate: read("--wbgt-moderate"),
-      high: read("--wbgt-high"),
-      extreme: read("--wbgt-extreme"),
-      border: read("--base-border"),
-      shade: read("--base-secondary"),
-      heat1: read("--heat-1"),
-      heat2: read("--heat-2"),
-      heat3: read("--heat-3"),
-      heat4: read("--heat-4"),
-      heat5: read("--heat-5"),
-      heat6: read("--heat-6"),
-      heat7: read("--heat-7"),
-    });
-  }, []);
+  const [colors] = useState<Record<string, string> | null>(readTokenColors);
   return colors;
 }
 
