@@ -144,16 +144,16 @@ class TestOptimiser:
         _, loose, _ = optimise(scenario, thermal, wait_ratio=1.20)
         assert loose.hpm <= tight.hpm + 1e-6
 
-    def test_acceptance_gate_from_the_brief(self, scenario, thermal):
+    def test_acceptance_gate_from_the_brief(self, scenario, optimisation):
         """The brief's stated acceptance criterion: at least a 20 % HPM
         reduction at no more than a 10 % wait increase on the demo scenario."""
-        result = run_full_optimisation(scenario, thermal)
+        result = optimisation
         assert result.hpm_reduction_pct >= 20.0
         assert result.wait_change_pct <= 10.0
 
-    def test_every_change_carries_a_populated_why_object(self, scenario, thermal):
+    def test_every_change_carries_a_populated_why_object(self, scenario, optimisation):
         """Also from the brief: no change ships without an explanation."""
-        result = run_full_optimisation(scenario, thermal)
+        result = optimisation
         assert result.changes
         for change in result.changes:
             assert change.action
@@ -163,51 +163,51 @@ class TestOptimiser:
             assert change.counterfactual_share_pct >= 0.0
 
     def test_explanations_cite_the_baseline_queue_not_the_optimised_one(
-        self, scenario, thermal
+        self, scenario, optimisation
     ):
         """Citing the optimised queue produces "open Gate C early because the
         predicted queue is 0" - which it is, because the gate was opened early."""
-        result = run_full_optimisation(scenario, thermal)
+        result = optimisation
         gate_changes = [c for c in result.changes if c.kind in ("gate", "staff")]
         assert gate_changes
         assert any(c.predicted_queue > 0 for c in gate_changes)
 
-    def test_counterfactual_shares_are_normalised(self, scenario, thermal):
-        result = run_full_optimisation(scenario, thermal)
+    def test_counterfactual_shares_are_normalised(self, scenario, optimisation):
+        result = optimisation
         total = sum(c.counterfactual_share_pct for c in result.changes)
         assert total == pytest.approx(100.0, abs=0.5)
 
 
 class TestPareto:
-    def test_frontier_is_monotonic_in_the_wait_allowance(self, scenario, thermal):
-        result = run_full_optimisation(scenario, thermal)
+    def test_frontier_is_monotonic_in_the_wait_allowance(self, scenario, optimisation):
+        result = optimisation
         exposures = [p["heat_weighted_exposure"] for p in result.pareto]
         assert exposures == sorted(exposures, reverse=True)
 
-    def test_scatter_contains_baseline_and_chosen(self, scenario, thermal):
-        result = run_full_optimisation(scenario, thermal)
+    def test_scatter_contains_baseline_and_chosen(self, scenario, optimisation):
+        result = optimisation
         kinds = [p["kind"] for p in result.pareto_scatter]
         assert kinds.count("baseline") == 1
         assert kinds.count("chosen") == 1
         assert "candidate" in kinds
 
-    def test_frontier_points_are_real_scored_candidates(self, scenario, thermal):
+    def test_frontier_points_are_real_scored_candidates(self, scenario, optimisation):
         """Nothing on the chart is interpolated: every point was simulated."""
-        result = run_full_optimisation(scenario, thermal)
+        result = optimisation
         for point in result.pareto:
             assert point["total_wait_minutes"] > 0
             assert point["heat_weighted_exposure"] >= 0
 
 
 class TestResources:
-    def test_only_movable_resources_are_relocated(self, scenario, thermal):
-        result = run_full_optimisation(scenario, thermal)
+    def test_only_movable_resources_are_relocated(self, scenario, optimisation):
+        result = optimisation
         movable = set(scenario.limits.movable_resources)
         for move in result.resource_moves:
             assert move["resource_id"] in movable
 
-    def test_relocations_go_somewhere_different(self, scenario, thermal):
-        result = run_full_optimisation(scenario, thermal)
+    def test_relocations_go_somewhere_different(self, scenario, optimisation):
+        result = optimisation
         for move in result.resource_moves:
             assert move["from_zone"] != move["to_zone"]
 

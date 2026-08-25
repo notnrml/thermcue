@@ -170,6 +170,15 @@ and each is now fixed and tested:
 | `groq/compound-mini` has 70,000 TPM but refuses custom tool calling | Rejected; an agent needs its own tools |
 | The model invented `get_thermal_state(hours=...)` for a tool taking no arguments | Dispatch filters to the declared schema and reports what it ignored |
 | The model called the same tool three times and spent the entire 8,000 TPM budget re-reading one answer | Repeat calls return a short pointer instead of the payload |
+| A 429 killed the cycle in four seconds while the provider's own response said to retry in 3.4 s | Retry honouring the provider's `Retry-After`, read from the header **and** the error body |
+| Two Fly machines each ran a background agent loop against one shared 8,000 TPM budget | Scaled to one machine; loop interval raised from 120 s to 900 s |
+
+The rate-limit fix is worth singling out, because the first attempt at it never
+reached the file: a later edit had already changed the string the patch was
+targeting, so the replacement silently did nothing and the deployed agent still
+failed in four seconds. It was only caught by checking the deployed behaviour
+against the provider's own "try again in 3.4s". An edit that does not apply
+leaves no trace; the running system does.
 
 The token budget drove a real architectural distinction: **what the model sees is
 not what the audit trace records**. Tool results are projected down for the model

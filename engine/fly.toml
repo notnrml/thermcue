@@ -13,6 +13,12 @@ primary_region = "iad"
 [env]
   PORT = "8000"
   THERMCUE_CORS_ORIGINS = "*"
+  # The background agent loop shares one tokens-per-minute budget with every
+  # triggered request, and on a free tier that budget is 8,000. At the 120 s
+  # default the loop alone consumed it and the demo trigger came back 429 with
+  # nothing published. Fifteen minutes is plenty for an event that runs in hours,
+  # and it leaves the budget for the thing a judge actually clicks.
+  THERMCUE_AGENT_TICK_SECONDS = "900"
 
 [http_service]
   internal_port = 8000
@@ -22,6 +28,10 @@ primary_region = "iad"
   # recoverable.
   auto_stop_machines = false
   auto_start_machines = true
+  # One machine, not two. Each runs its own background agent loop against a
+  # single shared free-tier token budget, so a second machine does not add
+  # availability here, it halves the tokens available to both and makes the
+  # agent console non-deterministic about which machine's history you see.
   min_machines_running = 1
 
   [http_service.concurrency]

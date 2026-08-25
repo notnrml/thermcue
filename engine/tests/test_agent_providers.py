@@ -199,13 +199,19 @@ class TestOpenAiProtocol:
 
     @respx.mock
     async def test_provider_error_surfaces_rather_than_being_swallowed(self, scenario):
+        """A 500 is not retryable and must reach the operator.
+
+        Deliberately not a 429: that is retried now, and asserting it here made
+        this single test sleep through the whole backoff schedule for 65 seconds.
+        Rate limiting has its own tests, with the backoff neutralised.
+        """
         settings = make_settings()
         respx.post(f"{BASE}/chat/completions").mock(
-            return_value=httpx.Response(429, text="rate limited")
+            return_value=httpx.Response(500, text="upstream exploded")
         )
         directive = await ThermCieAgentShim(scenario, settings).decide()
         assert directive.grounded is False
-        assert "429" in directive.text or "rate limited" in directive.text
+        assert "500" in directive.text or "exploded" in directive.text
 
 
 class TestFreeTierQuirks:
@@ -414,3 +420,89 @@ class TestModelView:
         await tools.get_thermal_state()
         assert len(tools.calls[0].result["zones"]) == 35
         json.loads(tools.calls[0].to_trace().output)
+
+
+@pytest.fixture()
+def no_backoff(monkeypatch):
+    """Neutralise the retry backoff so the tests assert behaviour, not patience."""
+
+    async def instant(_seconds: float) -> None:
+        return None
+
+    import thermcue.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "_backoff_sleep", instant)
+
+
+class TestRateLimitHandling:
+    """A metered free tier refuses mid-cycle. That must cost time, not a directive."""
+
+    def test_retry_after_header_is_honoured(self):
+        from thermcue.agent import _retry_after_seconds
+
+        response = httpx.Response(429, headers={"retry-after": "7"})
+        assert _retry_after_seconds(response, fallback=99.0) == 7.0
+
+    def test_retry_delay_is_read_from_the_error_body(self):
+        """Groq puts the figure only in the body, and the deployed agent failed
+        in four seconds while the body said to try again in 3.4."""
+        from thermcue.agent import _retry_after_seconds
+
+        response = httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "Rate limit reached ... Please try again in 3.435s. Need more tokens?",
+                    "code": "rate_limit_exceeded",
+                }
+            },
+        )
+        assert _retry_after_seconds(response, fallback=99.0) == pytest.approx(4.435)
+
+    def test_falls_back_to_our_own_backoff_when_unsaid(self):
+        from thermcue.agent import _retry_after_seconds
+
+        assert _retry_after_seconds(httpx.Response(429, text="nope"), fallback=8.0) == 8.0
+
+    @respx.mock
+    async def test_a_rate_limit_is_retried_not_fatal(self, scenario, no_backoff):
+        settings = make_settings()
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            side_effect=[
+                # The tool-loop call is refused twice, then succeeds.
+                httpx.Response(429, json={"error": {"message": "try again in 0.01s"}}),
+                httpx.Response(429, json={"error": {"message": "try again in 0.01s"}}),
+                httpx.Response(200, json=text_response("assessment complete")),
+                # The agent then asks for the directive; that call is refused once.
+                httpx.Response(429, json={"error": {"message": "try again in 0.01s"}}),
+                httpx.Response(
+                    200, json=text_response("NO-ACTION | Recovered. | Plan stands.")
+                ),
+            ]
+        )
+        directive = await ThermCieAgentShim(scenario, settings).decide()
+        assert directive.tag == "NO-ACTION"
+        assert directive.grounded is True
+        assert route.call_count == 5, "every refusal must have been retried"
+
+    @respx.mock
+    async def test_a_persistent_rate_limit_eventually_surfaces(self, scenario, no_backoff):
+        """Retrying forever would hang the agent loop. It gives up and says so."""
+        settings = make_settings()
+        respx.post(f"{BASE}/chat/completions").mock(
+            return_value=httpx.Response(429, json={"error": {"message": "try again in 0.01s"}})
+        )
+        directive = await ThermCieAgentShim(scenario, settings).decide()
+        assert directive.grounded is False
+        assert "429" in directive.text or "rate limited" in directive.text
+
+    @respx.mock
+    async def test_a_non_429_error_is_not_retried(self, scenario):
+        """Retrying a 401 wastes the operator's time on a key that will never work."""
+        settings = make_settings()
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            return_value=httpx.Response(401, text="invalid api key")
+        )
+        directive = await ThermCieAgentShim(scenario, settings).decide()
+        assert directive.grounded is False
+        assert route.call_count == 1

@@ -43,3 +43,19 @@ def thermal(scenario):
 @pytest.fixture()
 def baseline_plan(scenario):
     return Plan.baseline(scenario)
+
+
+@pytest.fixture(scope="session")
+def optimisation(scenario, thermal):
+    """One full optimisation, shared across every test that inspects it.
+
+    The search now explores time-windowed staff swaps as well as gate timing and
+    staggering, which is what makes the result reproducible across machines - and
+    it costs about 12,000 simulated plans. Nine tests were each paying for their
+    own run, which took the suite from under five minutes to over thirteen. It is
+    deterministic, so one run is exactly as good as nine, and a suite nobody waits
+    for is a suite nobody runs.
+    """
+    from thermcue.optimise import run_full_optimisation
+
+    return run_full_optimisation(scenario, thermal)

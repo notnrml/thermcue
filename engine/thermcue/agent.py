@@ -57,6 +57,12 @@ BAND_ORDER = ["low", "moderate", "high", "extreme"]
 #: How far ahead a band change must fall to justify replanning, per the brief.
 REPLAN_HORIZON_HOURS = 3
 
+RATE_LIMIT_RETRIES = 4
+RATE_LIMIT_BASE_DELAY_S = 5.0
+RATE_LIMIT_MAX_DELAY_S = 30.0
+"""Free tiers meter tokens per minute, so a rate limit is normal operation and
+worth waiting out rather than failing the cycle over."""
+
 MAX_TOOL_ROUNDS = 5
 """Cap on tool-calling rounds before the agent is asked to commit to a
 directive. A model that keeps calling tools forever is a stuck agent, not a
@@ -85,6 +91,41 @@ class ToolGenerationError(RuntimeError):
     Distinct from a client error: nothing we sent was wrong, the model emitted a
     malformed call. Smaller and free-tier models do this regularly.
     """
+
+
+async def _backoff_sleep(seconds: float) -> None:
+    """Wait between rate-limit retries.
+
+    A named seam rather than a bare asyncio.sleep so tests can neutralise it.
+    Without it the retry tests genuinely slept through the backoff schedule and
+    took over a minute, which is how a suite stops being run.
+    """
+    await asyncio.sleep(seconds)
+
+
+def _retry_after_seconds(response: "httpx.Response", fallback: float) -> float:
+    """How long the provider says to wait, or our own backoff if it does not say.
+
+    Groq puts the figure in the error body as well as the header, and the body
+    is often the only place it appears, so both are read. A provider that tells
+    you exactly when its window resets is worth listening to; guessing wastes
+    either time or another rejected request.
+    """
+    header = response.headers.get("retry-after")
+    if header:
+        try:
+            return max(float(header), 0.5)
+        except ValueError:
+            pass
+    try:
+        message = str(((response.json() or {}).get("error") or {}).get("message", ""))
+    except ValueError:
+        message = response.text[:400]
+    found = re.search(r"try again in ([\d.]+)\s*s", message)
+    if found:
+        # A small margin: the window has to have actually rolled over.
+        return float(found.group(1)) + 1.0
+    return fallback
 
 
 def _is_tool_generation_failure(response: "httpx.Response") -> bool:
@@ -956,12 +997,39 @@ class ThermCueAgent:
         ) as client:
 
             async def complete(body: dict[str, Any]) -> dict[str, Any]:
-                response = await client.post("/chat/completions", json=body)
-                if response.status_code >= 400:
-                    raise RuntimeError(
-                        f"{llm.model} returned {response.status_code}: {response.text[:400]}"
+                """One completion, waiting out a rate limit rather than dying on it.
+
+                Free tiers meter tokens per minute and will refuse mid-cycle.
+                That is normal operation for them, not an outage, and it must not
+                cost the operator a directive: the deployed agent came back 429
+                in four seconds having published nothing, while the provider's
+                own response said to try again in 3.4.
+
+                So the provider's Retry-After is honoured when present, since it
+                knows when its window resets, with exponential backoff as the
+                fallback and a small ceiling on the total wait. Every other 4xx
+                is a real error and is raised immediately rather than retried.
+                """
+                delay = RATE_LIMIT_BASE_DELAY_S
+                last = ""
+                for attempt in range(RATE_LIMIT_RETRIES + 1):
+                    response = await client.post("/chat/completions", json=body)
+                    if response.status_code < 400:
+                        return response.json()
+                    if _is_tool_generation_failure(response):
+                        raise ToolGenerationError(response.text[:300])
+                    last = response.text[:400]
+                    if response.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
+                        raise RuntimeError(
+                            f"{llm.model} returned {response.status_code}: {last}"
+                        )
+                    await _backoff_sleep(
+                        min(_retry_after_seconds(response, delay), RATE_LIMIT_MAX_DELAY_S)
                     )
-                return response.json()
+                    delay = min(delay * 2, RATE_LIMIT_MAX_DELAY_S)
+                raise RuntimeError(
+                    f"{llm.model} rate limited after {RATE_LIMIT_RETRIES} retries: {last}"
+                )
 
             for _ in range(MAX_TOOL_ROUNDS):
                 try:
