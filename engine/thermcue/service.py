@@ -296,7 +296,9 @@ async def build_thermal_bundle(
 
     analogue: AnalogueDay | None = None
     try:
-        start, end = analogue_search_window(scenario.date)
+        start, end = analogue_search_window(
+            scenario.date, pinned_end=scenario.analogue_window_end
+        )
         observed = await provider.venue_observed(
             scenario.centroid[1], scenario.centroid[0], start, end, scenario.timezone
         )

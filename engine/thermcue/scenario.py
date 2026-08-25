@@ -121,6 +121,7 @@ class Scenario:
     zone_edges: tuple[dict[str, Any], ...]
     station: StationSpec
     notes: tuple[str, ...]
+    analogue_window_end: str | None
 
     @property
     def hours(self) -> tuple[int, ...]:
@@ -317,6 +318,7 @@ def parse_scenario(raw: dict[str, Any]) -> Scenario:
         zone_edges=tuple(raw.get("zone_edges", [])),
         station=station,
         notes=tuple(raw.get("notes", [])),
+        analogue_window_end=raw.get("analogue_window_end"),
     )
 
 

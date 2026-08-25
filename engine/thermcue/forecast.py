@@ -316,15 +316,29 @@ def select_analogue_day(
     return best
 
 
-def analogue_search_window(event_date: str, today: date | None = None) -> tuple[str, str]:
+def analogue_search_window(
+    event_date: str, today: date | None = None, pinned_end: str | None = None
+) -> tuple[str, str]:
     """Date range to search for an analogue.
 
     Ends yesterday, never today: FortyGuard's catalogue runs to today but the
     current day is partial, and a partial day would win the match on the hours it
     does have.
+
+    ``pinned_end`` fixes the window regardless of the calendar, and the scenario
+    sets it. Without that this function returned a different range every day,
+    which changed the archive request, which changed its cache key - so the
+    committed cache stopped matching the moment the date rolled over. It did,
+    overnight, and the offline pipeline silently lost its analogue day: no
+    per-zone offsets, no FortyGuard spatial signal, and a demo that quietly
+    degraded for anyone opening it after the day it was built. A pinned demo has
+    to be pinned to a date, not to "yesterday".
     """
-    today = today or date.today()
-    end = min(today - timedelta(days=1), date.fromisoformat(event_date) - timedelta(days=1))
+    if pinned_end:
+        end = date.fromisoformat(pinned_end)
+    else:
+        today = today or date.today()
+        end = min(today - timedelta(days=1), date.fromisoformat(event_date) - timedelta(days=1))
     start = end - timedelta(days=ANALOGUE_SEARCH_DAYS)
     return start.isoformat(), end.isoformat()
 

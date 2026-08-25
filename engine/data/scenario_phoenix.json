@@ -8,6 +8,8 @@
   "centroid": [-112.0755, 33.4634],
   "time_window": { "start_hour": 15, "end_hour": 21 },
   "expected_attendance": 21500,
+  "analogue_window_end": "2026-08-24",
+  "_analogue_window_end_comment": "Last date searched for an analogue. Pinned rather than derived from today, so the committed response cache keeps matching after the calendar moves. Unpinned, the archive request changed daily, its cache key changed with it, and the offline demo silently lost its analogue day and with it the whole FortyGuard spatial signal. Clear this to track the calendar in live operation.",
   "notes": [
     "Arrival curves, service rates and staffing are a planning scenario, not observed attendance data. They are the operator's inputs in the real product and are stated as assumptions in the README.",
     "Every temperature in the served payload comes from FortyGuard and the forecast composition; nothing thermal is authored in this file."
