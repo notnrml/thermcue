@@ -65,7 +65,20 @@ function formatValue(n: number): string {
   return Math.round(n).toLocaleString("en-GB");
 }
 
+/**
+ * Percentage change from baseline to optimised.
+ *
+ * A zero baseline is a real case, not a defensive hypothetical: on a mild
+ * forecast no zone reaches the High or Extreme band, so person-minutes in
+ * High+Extreme is legitimately zero on both sides. Dividing by it rendered
+ * "NaN%" in a pill on the primary KPI panel. There is no percentage change
+ * between nothing and nothing, so the card shows no delta chip at all rather
+ * than a number that cannot exist.
+ */
 function deltaFor(baseline: number, optimised: number) {
+  if (baseline === 0) {
+    return { text: optimised === 0 ? null : "new", pct: optimised === 0 ? 0 : 100 };
+  }
   const pct = ((optimised - baseline) / baseline) * 100;
   const sign = pct > 0 ? "+" : "";
   return { text: `${sign}${pct.toFixed(0)}%`, pct };
@@ -132,7 +145,7 @@ function CompareTab({
                   label={m.label}
                   value={formatValue(optimised)}
                   unit={m.unit}
-                  delta={delta.text}
+                  delta={delta.text ?? undefined}
                   variant={improved ? "delta-positive" : "delta-negative"}
                 />
               </div>

@@ -11,7 +11,7 @@
   "result": {
     "latitude": 33.44449,
     "longitude": -112.0284,
-    "generationtime_ms": 0.125885009765625,
+    "generationtime_ms": 0.110626220703125,
     "utc_offset_seconds": -25200,
     "timezone": "America/Phoenix",
     "timezone_abbreviation": "GMT-7",
@@ -183,6 +183,6 @@
       ]
     }
   },
-  "fetched_at": "2026-08-25T05:10:46.317784+00:00",
+  "fetched_at": "2026-08-25T05:23:51.382326+00:00",
   "activity_id": null
 }

@@ -38,12 +38,24 @@ export default function ProvenanceStrip({
   const sources = meta?.sources ?? {};
   const degraded = source === "fallback" || meta?.hasFortyguardSpatialSignal === false;
 
+  /* Two independent facts, and they must not appear to contradict the
+   * Live/Cached badge on the map. That badge reports where the *data* came
+   * from: the FortyGuard API or the response cache. This strip reports whether
+   * the *engine* answered at all. Both can be true at once, and the first
+   * wording here said "Live engine" beside a badge reading "Cached", which
+   * looked like the interface disagreeing with itself. */
   const summary =
     source === "fallback"
-      ? "Showing the bundled demo scenario: the engine is not reachable"
-      : meta?.hasFortyguardSpatialSignal
-        ? "Live engine, FortyGuard hyperlocal signal applied"
-        : "Live engine, no FortyGuard spatial signal applied";
+      ? "Engine unreachable, showing the bundled demo scenario"
+      : [
+          "Engine connected",
+          meta?.freshness === "cached"
+            ? "serving cached FortyGuard responses"
+            : "live FortyGuard responses",
+          meta?.hasFortyguardSpatialSignal
+            ? "hyperlocal signal applied"
+            : "no hyperlocal signal",
+        ].join(", ");
 
   return (
     <section
@@ -93,8 +105,11 @@ export default function ProvenanceStrip({
         </span>
       </button>
 
+      {/* Bounded and scrollable. Ten provenance notes at full length are taller
+        * than the map, and an honesty panel that shoves the product off screen
+        * defeats its own purpose. */}
       {open ? (
-        <div className="space-y-4 border-t border-base-border px-6 py-4">
+        <div className="max-h-[38vh] space-y-4 overflow-y-auto border-t border-base-border bg-base-surface px-6 py-4">
           {error ? (
             <p className="text-caption text-base-tertiary">
               <span className="text-base-secondary">Engine unreachable.</span>{" "}
