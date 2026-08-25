@@ -17,6 +17,42 @@ from fastapi.testclient import TestClient
 from thermcue.api import app
 
 
+@pytest.fixture(scope="module", autouse=True)
+def no_live_model():
+    """Pin the API tests to the agent's deterministic path.
+
+    Once a real model key sits in engine/.env these tests start driving a live
+    provider: slow, metered, and non-deterministic, so a rate limit on someone
+    else's account turns into a red build here. The model path is covered by
+    tests/test_agent_providers.py against a mocked provider, which is where it
+    belongs. These tests are about the HTTP contract.
+    """
+    import os
+
+    from thermcue.config import get_settings
+
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in (
+            "THERMCUE_LLM_API_KEY",
+            "THERMCUE_LLM_PROVIDER",
+            "THERMCUE_LLM_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "THERMCUE_AGENT_MODEL",
+        )
+    }
+    os.environ["THERMCUE_LLM_API_KEY"] = ""
+    os.environ["ANTHROPIC_API_KEY"] = ""
+    get_settings.cache_clear()
+    yield
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="module")
 def client():
     with TestClient(app) as test_client:
@@ -242,10 +278,19 @@ class TestAgent:
 
     def test_directive_declares_which_engine_produced_it(self, client):
         """A deterministic fallback wearing the agent's clothes would be a lie
-        about the primary track."""
+        about the primary track, and a model-written directive must name the
+        exact model for the submission's AI-tools disclosure."""
         body = client.post("/agent/trigger?zone_id=z-lawn&delta_c=2.0").json()
-        assert body["engine"] in ("anthropic", "deterministic", "error")
+        assert body["engine"], "every directive must say what produced it"
+        # No key is configured for these tests, so it must be the labelled
+        # fallback rather than anything that could be mistaken for a model.
+        assert body["engine"] == "deterministic"
         assert body["promptVersion"]
+
+    def test_health_reports_whether_a_model_is_configured(self, client):
+        body = client.get("/health").json()
+        assert body["model_configured"] is False
+        assert body["model_provider"] is None
 
 
 class TestCredits:

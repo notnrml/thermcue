@@ -33,6 +33,17 @@ from thermcue.config import LLM_PRESETS, Settings
 BASE = "https://fake-provider.test/v1"
 
 
+def bare(**values) -> Settings:
+    """Settings built from arguments only.
+
+    ``_env_file=None`` matters: without it pydantic-settings reads the
+    developer's engine/.env, so once a real Groq key is configured locally these
+    tests start asserting against that key instead of the fixture. A test whose
+    result depends on who ran it is not a test.
+    """
+    return Settings(_env_file=None, **values)
+
+
 def make_settings(**overrides) -> Settings:
     """Settings pointed at the fake provider, with no real key anywhere."""
     values = {
@@ -44,7 +55,7 @@ def make_settings(**overrides) -> Settings:
         "ANTHROPIC_API_KEY": "",
         **overrides,
     }
-    return Settings(**{k: v for k, v in values.items()})
+    return bare(**{k: v for k, v in values.items()})
 
 
 def tool_call_response(name: str, arguments: str = "{}") -> dict:
@@ -86,21 +97,21 @@ class TestPresets:
             assert LLM_PRESETS[name].protocol == "openai"
 
     def test_provider_is_inferred_from_whichever_key_is_set(self):
-        assert Settings(ANTHROPIC_API_KEY="x").resolved_provider == "anthropic"
-        assert Settings(THERMCUE_LLM_API_KEY="x").resolved_provider == "openai"
-        assert Settings().resolved_provider is None
+        assert bare(ANTHROPIC_API_KEY="x").resolved_provider == "anthropic"
+        assert bare(THERMCUE_LLM_API_KEY="x").resolved_provider == "openai"
+        assert bare().resolved_provider is None
 
     def test_explicit_provider_beats_inference(self):
-        s = Settings(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="groq")
+        s = bare(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="groq")
         assert s.llm.provider == "groq"
         assert "groq.com" in s.llm.base_url
 
     def test_preset_supplies_the_default_model(self):
-        s = Settings(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="qwen")
+        s = bare(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="qwen")
         assert s.llm.model == LLM_PRESETS["qwen"].default_model
 
     def test_explicit_model_beats_the_preset(self):
-        s = Settings(
+        s = bare(
             THERMCUE_LLM_API_KEY="x",
             THERMCUE_LLM_PROVIDER="qwen",
             THERMCUE_AGENT_MODEL="qwen-max",
@@ -108,7 +119,7 @@ class TestPresets:
         assert s.llm.model == "qwen-max"
 
     def test_unknown_provider_is_an_error_not_a_silent_fallback(self):
-        s = Settings(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="not-a-provider")
+        s = bare(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="not-a-provider")
         with pytest.raises(ValueError, match="Unknown THERMCUE_LLM_PROVIDER"):
             _ = s.llm
         # has_model must not raise; the engine has to keep serving.
@@ -117,7 +128,7 @@ class TestPresets:
     def test_no_key_means_no_model_rather_than_an_exception(self):
         """The engine must serve the whole application with no model key at all,
         running the deterministic path and labelling it."""
-        s = Settings()
+        s = bare()
         assert s.llm is None
         assert s.has_model is False
 
@@ -141,7 +152,10 @@ class TestOpenAiProtocol:
         assert directive.tag == "NO-ACTION"
         assert directive.grounded is True
         assert [c.name for c in directive.tool_calls] == ["get_thermal_state"]
-        assert directive.engine == LLM_PRESETS["openai"].label
+        # Names the model that ran, not the preset's default. The preset label
+        # is only right when the model was not overridden, and this string is
+        # the submission's AI-tools disclosure, so it has to be true.
+        assert directive.engine == "fake-model (openai)"
 
     @respx.mock
     async def test_tools_are_sent_in_openai_function_shape(self, scenario):
@@ -303,3 +317,100 @@ class ThermCieAgentShim(ThermCueAgent):
     async def decide(self, perturbation=None) -> Directive:
         self.reference_bands = {"z-plaza": {15: "moderate"}}
         return await super().decide(perturbation=perturbation)
+
+
+class TestEngineLabel:
+    """The label is the submission's AI-tools disclosure. It has to be true."""
+
+    def test_label_names_the_model_that_actually_ran(self):
+        agent = ThermCueAgent(
+            None,
+            bare(
+                THERMCUE_LLM_API_KEY="x",
+                THERMCUE_LLM_PROVIDER="groq",
+                THERMCUE_AGENT_MODEL="openai/gpt-oss-120b",
+            ),
+        )
+        assert agent._engine_label() == "openai/gpt-oss-120b (groq)"
+
+    def test_unoverridden_model_still_names_the_exact_model_id(self):
+        """The preset's friendly label is never published. A directive from
+        gpt-oss-120b must not read "Llama 3.3 70B" just because the preset
+        default was not overridden."""
+        agent = ThermCueAgent(
+            None, bare(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="groq")
+        )
+        assert agent._engine_label() == "openai/gpt-oss-120b (groq)"
+
+    def test_no_model_is_labelled_deterministic(self):
+        assert ThermCueAgent(None, bare())._engine_label() == "deterministic"
+
+    def test_misconfiguration_is_labelled_not_silently_deterministic(self):
+        agent = ThermCueAgent(
+            None, bare(THERMCUE_LLM_API_KEY="x", THERMCUE_LLM_PROVIDER="nope")
+        )
+        assert agent._engine_label() == "misconfigured"
+
+
+class TestToolDispatchRobustness:
+    """Models invent arguments and repeat calls. Neither may cost a cycle."""
+
+    async def test_invented_arguments_are_dropped_not_crashed_on(self, scenario):
+        """A live free-tier model called get_thermal_state(hours=...) for a tool
+        that takes none. Passing that through raised TypeError and killed the
+        whole cycle."""
+        tools = AgentTools(scenario, make_settings())
+        result = await tools.dispatch(
+            "get_thermal_state", {"hours": [15, 16], "zone": "z-lawn"}
+        )
+        assert result["_ignored_arguments"] == ["hours", "zone"]
+        assert result["zones"], "the tool must still have run"
+
+    async def test_unknown_tool_reports_the_real_ones(self, scenario):
+        tools = AgentTools(scenario, make_settings())
+        result = await tools.dispatch("summon_rain", {})
+        assert "unknown tool" in result["error"]
+        assert "get_thermal_state" in result["available_tools"]
+
+    async def test_a_repeated_call_returns_a_pointer_not_the_payload(self, scenario):
+        """A live run called the same tool three times and spent the whole
+        tokens-per-minute budget re-reading one answer."""
+        tools = AgentTools(scenario, make_settings())
+        first = await tools.dispatch("get_thermal_state", {})
+        assert first["zones"]
+
+        second = await tools.dispatch("get_thermal_state", {})
+        assert second["_already_returned"] is True
+        assert "zones" not in second
+        assert len(json.dumps(second)) < len(json.dumps(first)) / 4
+
+    async def test_different_arguments_are_not_deduplicated(self, scenario):
+        tools = AgentTools(scenario, make_settings())
+        a = await tools.dispatch("run_simulation", {"plan_label": "baseline"})
+        b = await tools.dispatch("run_simulation", {"plan_label": "optimised"})
+        assert "_already_returned" not in a
+        assert "_already_returned" not in b
+
+
+class TestModelView:
+    """What the model sees is not what the audit trace records."""
+
+    async def test_thermal_state_is_projected_down_for_the_model(self, scenario):
+        from thermcue.agent import model_view
+
+        tools = AgentTools(scenario, make_settings())
+        full = await tools.get_thermal_state()
+        compact = model_view("get_thermal_state", full)
+
+        assert len(json.dumps(compact)) < len(json.dumps(full)) / 3
+        # Dropped, never altered: everything the model can quote is still a
+        # figure a tool returned, so grounding is unaffected.
+        assert "escalations_within_horizon" in compact
+        assert "hottest_hour_per_zone" in compact
+
+    async def test_the_audit_trace_keeps_the_full_payload(self, scenario):
+        """The trace must be complete or it is not evidence."""
+        tools = AgentTools(scenario, make_settings())
+        await tools.get_thermal_state()
+        assert len(tools.calls[0].result["zones"]) == 35
+        json.loads(tools.calls[0].to_trace().output)

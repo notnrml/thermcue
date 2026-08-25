@@ -57,10 +57,11 @@ BAND_ORDER = ["low", "moderate", "high", "extreme"]
 #: How far ahead a band change must fall to justify replanning, per the brief.
 REPLAN_HORIZON_HOURS = 3
 
-MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 5
 """Cap on tool-calling rounds before the agent is asked to commit to a
 directive. A model that keeps calling tools forever is a stuck agent, not a
-thorough one."""
+thorough one, and on a metered free tier each extra round is paid for twice
+because the whole message history is resent."""
 
 #: Tolerance for matching a number in generated text against a tool output.
 #: Generous enough to allow the model to quote a rounded figure, tight enough
@@ -78,9 +79,122 @@ class DirectiveRejected(RuntimeError):
     """A generated directive cited a number no tool produced."""
 
 
+class ToolGenerationError(RuntimeError):
+    """The provider rejected the model's own tool call before running it.
+
+    Distinct from a client error: nothing we sent was wrong, the model emitted a
+    malformed call. Smaller and free-tier models do this regularly.
+    """
+
+
+def _is_tool_generation_failure(response: "httpx.Response") -> bool:
+    """Does this 400 mean the model produced an unusable tool call?"""
+    if response.status_code != 400:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error") or {}
+    return error.get("code") == "tool_use_failed" or "tool call" in str(
+        error.get("message", "")
+    ).lower()
+
+
 #: Cap on a serialised tool output in the published trace. Whole responses can
 #: run to megabytes of GeoJSON and the trace is rendered in a side panel.
 TRACE_OUTPUT_LIMIT = 4000
+
+#: Cap on what is sent back to the model. Much tighter than the trace limit,
+#: because free tiers meter tokens per minute and the message history is resent
+#: on every round, so a verbose tool result is paid for repeatedly.
+MODEL_OUTPUT_LIMIT = 1800
+
+
+def model_view(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """What the model sees, which is not what the audit trace records.
+
+    The distinction matters in both directions. The trace must be complete or it
+    is not evidence. The model must be given only what it needs to decide, or a
+    free tier's tokens-per-minute limit ends the cycle - which is exactly what
+    happened on Groq: full thermal state is 35 zone-hours, resent on every round,
+    and the run died at 429 before publishing anything.
+
+    So this projects each tool result down to the fields a directive can
+    actually cite. Nothing is invented and nothing is rounded differently; fields
+    are dropped, never altered, so every number the model can quote is still a
+    number a tool returned and grounding is unaffected.
+    """
+    if name == "get_thermal_state":
+        zones = result.get("zones") or []
+        peak_by_zone: dict[str, dict[str, Any]] = {}
+        for row in zones:
+            current = peak_by_zone.get(row["zone_id"])
+            if current is None or row["wbgt_estimate_c"] > current["wbgt_estimate_c"]:
+                peak_by_zone[row["zone_id"]] = row
+        return {
+            "freshness": result.get("freshness"),
+            "has_standing_plan_reference": result.get("has_standing_plan_reference"),
+            "escalations_within_horizon": result.get("escalations_within_horizon"),
+            "band_changes_vs_plan": (result.get("band_changes_vs_plan") or [])[:6],
+            "hottest_hour_per_zone": list(peak_by_zone.values()),
+            "_note": "Per-hour detail omitted for brevity; the full series is in the audit trace.",
+        }
+    if name == "run_optimiser":
+        return {
+            "baseline_hpm": result.get("baseline_hpm"),
+            "optimised_hpm": result.get("optimised_hpm"),
+            "hpm_reduction_pct": result.get("hpm_reduction_pct"),
+            "total_wait_change_pct": result.get("total_wait_change_pct"),
+            "changes": [
+                {
+                    "action": c.get("action"),
+                    "band_and_hour": c.get("band_and_hour"),
+                    "predicted_queue": c.get("predicted_queue"),
+                }
+                for c in (result.get("changes") or [])[:5]
+            ],
+            "resource_moves": [
+                {"resource_name": m.get("resource_name"), "to_zone": m.get("to_zone")}
+                for m in (result.get("resource_moves") or [])[:3]
+            ],
+        }
+    if name == "run_simulation":
+        return {
+            k: result.get(k)
+            for k in (
+                "plan",
+                "heat_weighted_person_minutes",
+                "person_minutes_high_extreme",
+                "total_wait_person_minutes",
+                "longest_wait_minutes",
+                "hpm_p50",
+            )
+        }
+    if name == "get_forecast":
+        return {"hours": (result.get("hours") or [])}
+    return result
+
+
+def _model_json(name: str, result: dict[str, Any]) -> str:
+    """Serialise a tool result for the model, bounded and always valid JSON."""
+    projected = model_view(name, result)
+    encoded = json.dumps(projected, sort_keys=True, default=str)
+    if len(encoded) <= MODEL_OUTPUT_LIMIT:
+        return encoded
+    return json.dumps(
+        {
+            "_truncated": True,
+            "_note": "Result too large to return in full; ask for a narrower tool.",
+            "summary": {
+                k: v
+                for k, v in projected.items()
+                if isinstance(v, (int, float, str, bool)) or v is None
+            },
+        },
+        sort_keys=True,
+        default=str,
+    )
 
 
 def _trace_json(payload: Any) -> str:
@@ -236,6 +350,9 @@ class AgentTools:
         self._optimisation: OptimisationResult | None = None
         self.calls: list[ToolCall] = []
         self.perturbation: dict[str, float] = {}
+        self._served: set[str] = set()
+        """Tool calls already answered this cycle, so a looping model is not
+        charged for the same answer twice."""
         self.reference_bands = reference_bands or {}
         """The band map the standing plan was built on. The replanning trigger is
         a diff against **this**, not a search for band transitions inside one
@@ -554,6 +671,17 @@ class AgentTools:
         ]
 
     async def dispatch(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run a tool, ignoring arguments it does not accept.
+
+        Models invent arguments. A live run against a free-tier model called
+        ``get_thermal_state(hours=...)`` for a tool that takes none, and passing
+        that straight through raised TypeError and killed the whole cycle. The
+        tool contract is what the schema declares, so anything outside it is
+        dropped and reported back rather than crashing - the model then sees what
+        was ignored and can correct itself on the next round.
+        """
+        import inspect
+
         handlers: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
             "get_thermal_state": self.get_thermal_state,
             "get_forecast": self.get_forecast,
@@ -565,8 +693,36 @@ class AgentTools:
         }
         handler = handlers.get(name)
         if handler is None:
-            return {"error": f"unknown tool {name!r}"}
-        return await handler(**arguments)
+            return {
+                "error": f"unknown tool {name!r}",
+                "available_tools": sorted(handlers),
+            }
+
+        accepted = set(inspect.signature(handler).parameters)
+        allowed = {k: v for k, v in arguments.items() if k in accepted}
+        ignored = sorted(set(arguments) - accepted)
+
+        # Weaker models loop: a live run called get_thermal_state three times in
+        # one cycle, spent the whole tokens-per-minute budget re-reading the same
+        # answer, and never reached a directive. A repeat gets a short pointer
+        # instead of the payload, which both saves the tokens and tells the model
+        # plainly that it already has this so it should move on.
+        signature = f"{name}:{json.dumps(allowed, sort_keys=True, default=str)}"
+        if signature in self._served:
+            return {
+                "_already_returned": True,
+                "_note": (
+                    f"You already called {name} with these arguments in this cycle "
+                    f"and the result has not changed. Use the earlier result and "
+                    f"either call a different tool or publish your directive."
+                ),
+            }
+        self._served.add(signature)
+
+        result = await handler(**allowed)
+        if ignored:
+            result = {**result, "_ignored_arguments": ignored}
+        return result
 
 
 # ----------------------------------------------------------------- agent ----
@@ -664,7 +820,15 @@ class ThermCueAgent:
             llm = self.settings.llm
         except ValueError:
             return "misconfigured"
-        return llm.label if llm else "deterministic"
+        if llm is None:
+            return "deterministic"
+        # Always the exact model id and provider, never the preset's friendly
+        # label. A first version used the label when it appeared to match the
+        # model, which meant a directive from openai/gpt-oss-120b could be
+        # published as "Llama 3.3 70B (Groq)" simply because the preset default
+        # had not been overridden. This string is the submission's AI-tools
+        # disclosure; one unconditional rule is the only way it stays true.
+        return f"{llm.model} ({llm.provider})"
 
     async def _decide_with_model(self, tools: AgentTools, triggered: bool) -> Directive:
         """Tool-calling loop against whichever model provider is configured."""
@@ -692,7 +856,7 @@ class ThermCueAgent:
             tag=tag,
             text=text,
             tool_calls=tools.calls,
-            engine=llm.label,
+            engine=self._engine_label(),
         )
 
     async def _run_anthropic(
@@ -730,7 +894,7 @@ class ThermCueAgent:
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": _trace_json(output),
+                        "content": _model_json(block.name, output),
                     }
                 )
             messages.append({"role": "user", "content": results})
@@ -795,21 +959,31 @@ class ThermCueAgent:
                 response = await client.post("/chat/completions", json=body)
                 if response.status_code >= 400:
                     raise RuntimeError(
-                        f"{llm.label} returned {response.status_code}: {response.text[:400]}"
+                        f"{llm.model} returned {response.status_code}: {response.text[:400]}"
                     )
                 return response.json()
 
             for _ in range(MAX_TOOL_ROUNDS):
-                body = await complete(
-                    {
-                        "model": llm.model,
-                        "messages": messages,
-                        "tools": openai_tools,
-                        "tool_choice": "auto",
-                        "temperature": self.settings.agent_temperature,
-                        "max_tokens": self.settings.agent_max_tokens,
-                    }
-                )
+                try:
+                    body = await complete(
+                        {
+                            "model": llm.model,
+                            "messages": messages,
+                            "tools": openai_tools,
+                            "tool_choice": "auto",
+                            "temperature": self.settings.agent_temperature,
+                            "max_tokens": self.settings.agent_max_tokens,
+                        }
+                    )
+                except ToolGenerationError:
+                    # Stop asking for tools and let it commit to a directive with
+                    # what has already been gathered. Every figure it can cite is
+                    # still a figure a tool returned, so grounding is unchanged;
+                    # the model simply has less to work with, which is the honest
+                    # consequence of a model that cannot format a tool call.
+                    if not tools.calls:
+                        raise
+                    break
                 choice = (body.get("choices") or [{}])[0]
                 message = choice.get("message") or {}
                 calls = message.get("tool_calls") or []
@@ -841,7 +1015,7 @@ class ThermCueAgent:
                             "role": "tool",
                             "tool_call_id": call.get("id") or name,
                             "name": name,
-                            "content": _trace_json(output),
+                            "content": _model_json(name, output),
                         }
                     )
 

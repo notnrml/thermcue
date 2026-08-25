@@ -63,13 +63,10 @@ No login, no installation. The engine serves the committed response cache, so th
 demo renders the same numbers this README quotes even if the FortyGuard API is
 unreachable during judging.
 
-**One caveat stated up front:** no model key is configured on the deployment, so
-the agent runs its deterministic path and labels itself `engine: "deterministic"`
-in every directive, in the console and on `/health`. It uses the same seven
-tools, the same guardrails and the same numeric grounding; it is not the
-model-driven agent, and it does not pretend to be. Point it at any provider (see
-[Bringing your own model](#bringing-your-own-model)) and the same endpoint
-returns that model's name instead.
+The agent runs on **GPT-OSS 120B via Groq's free tier**, and every directive
+names the exact model that produced it. With no model key configured the engine
+still serves everything, running the agent's deterministic path and labelling it
+`engine: "deterministic"` rather than letting a fallback pass for a model.
 
 ## Quickstart
 
@@ -123,7 +120,7 @@ tier worth having, so running the real agent costs nothing:
 | `THERMCUE_LLM_PROVIDER` | Default model | Free tier |
 |---|---|---|
 | `qwen` | `qwen-plus` | Alibaba DashScope free quota |
-| `groq` | `llama-3.3-70b-versatile` | Free tier, rate limited |
+| `groq` | `openai/gpt-oss-120b` | **Free, verified working** |
 | `openrouter` | `qwen/qwen-2.5-72b-instruct` | Free models available |
 | `cerebras` | `llama-3.3-70b` | Free tier |
 | `deepseek` | `deepseek-chat` | Paid, very cheap |
@@ -153,8 +150,34 @@ malformed tool arguments, content returned as parts rather than a string, and a
 reasoning block prepended to the answer — none of which relaxes the grounding
 check.
 
-Every directive publishes the model that produced it, so the disclosure the
-submission form asks for is a fact the system reports rather than a claim.
+Every directive publishes the exact model id that produced it — `openai/gpt-oss-120b
+(groq)`, not a friendly preset name — so the disclosure the submission form asks
+for is a fact the system reports rather than a claim. An early version published
+the preset's label when it looked close enough to the model, which meant a
+directive from GPT-OSS could be labelled "Llama 3.3 70B" purely because the
+default had not been overridden. One unconditional rule is the only way that
+string stays true.
+
+### What choosing a free model actually taught us
+
+Running against a real free tier found five things a mocked provider never would,
+and each is now fixed and tested:
+
+| What happened | Fix |
+|---|---|
+| `llama-3.3-70b-versatile` returns 404 on a free key | Preset default changed to a model free keys can use |
+| `qwen/qwen3.6-27b` passes a chat completion but emits tool calls Groq cannot parse | Caught by `check_model.py` step 3 in seconds, before deployment |
+| `groq/compound-mini` has 70,000 TPM but refuses custom tool calling | Rejected; an agent needs its own tools |
+| The model invented `get_thermal_state(hours=...)` for a tool taking no arguments | Dispatch filters to the declared schema and reports what it ignored |
+| The model called the same tool three times and spent the entire 8,000 TPM budget re-reading one answer | Repeat calls return a short pointer instead of the payload |
+
+The token budget drove a real architectural distinction: **what the model sees is
+not what the audit trace records**. Tool results are projected down for the model
+— full thermal state goes from 6,904 to 1,050 characters — while the trace keeps
+everything. Fields are dropped, never altered, so every figure the model can
+quote is still a figure a tool returned and grounding is untouched. The trace
+must be complete or it is not evidence; the model must be given only what it
+needs to decide, or a metered free tier ends the cycle before it publishes.
 
 ## Architecture
 

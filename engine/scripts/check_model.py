@@ -140,7 +140,11 @@ def main() -> int:
     agent = ThermCueAgent(scenario, settings)
 
     async def run():
-        await agent.decide()  # cold start seeds the reference bands
+        # Seed the reference bands directly rather than burning a whole cold-start
+        # cycle on the model. Two cycles is twice the tokens, and on an 8,000
+        # tokens-per-minute free tier that alone is the difference between this
+        # check passing and hitting a rate limit that says nothing about the key.
+        agent.reference_bands = {"z-lawn": {h: "moderate" for h in scenario.hours}}
         return await agent.decide(perturbation={"z-lawn": 3.0})
 
     directive = asyncio.run(run())

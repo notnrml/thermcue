@@ -49,9 +49,15 @@ LLM_PRESETS: dict[str, LlmPreset] = {
     "groq": LlmPreset(
         protocol="openai",
         base_url="https://api.groq.com/openai/v1",
-        default_model="llama-3.3-70b-versatile",
-        label="Llama 3.3 70B (Groq)",
+        default_model="openai/gpt-oss-120b",
+        label="GPT-OSS 120B (Groq)",
     ),
+    # Verified on a free Groq key: llama-3.3-70b-versatile returns 404
+    # model_not_found, and qwen/qwen3.6-27b passes the completion check but
+    # cannot emit a parseable tool call, so gpt-oss-120b is the default. The
+    # groq/compound models carry a far higher token allowance but refuse custom
+    # tool calling outright, which makes them useless for an agent with its own
+    # tools.
     "openrouter": LlmPreset(
         protocol="openai",
         base_url="https://openrouter.ai/api/v1",

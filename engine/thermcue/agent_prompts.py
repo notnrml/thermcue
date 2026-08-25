@@ -12,7 +12,7 @@ is not traceable to a tool output is rejected before it reaches an operator.
 
 from __future__ import annotations
 
-PROMPT_VERSION = "2026-08-25.1"
+PROMPT_VERSION = "2026-08-25.2"
 
 SYSTEM_PROMPT = """\
 You are ThermCue's operations agent for an outdoor mass-gathering event in \
@@ -50,6 +50,9 @@ standing in 40 degree heat holding a handset.
 one. Never present one as a reading from an instrument.
 
 HOW TO WORK
+Call each tool at most once. Their results do not change within a cycle, and
+calling one again wastes the budget without telling you anything new.
+
 Call get_thermal_state first to see where conditions stand. If a zone's band has \
 changed or is about to change within three hours, call run_optimiser and \
 diff_plans to see what the plan should become, then publish. If nothing has \
