@@ -150,17 +150,28 @@ def _verdict(
         )
 
     if disagreements:
+        order = ["low", "moderate", "high", "extreme"]
         worst = sorted(
-            disagreements,
-            key=lambda d: ["low", "moderate", "high", "extreme"].index(d["zone_band"]),
-            reverse=True,
+            disagreements, key=lambda d: order.index(d["zone_band"]), reverse=True
         )[0]
+        # The consequence depends on which way the disagreement runs, and an
+        # earlier version asserted under-triage unconditionally. When the station
+        # reads hotter than the venue - which happens here, because Sky Harbor is
+        # an open airfield while the venue sits in building shadow - a
+        # station-based plan over-triages rather than missing the risk. Saying
+        # "would not trigger any action" in that case is simply false.
+        venue_hotter = order.index(worst["zone_band"]) > order.index(worst["station_band"])
+        consequence = (
+            "A plan built on the station alone would not trigger any action there"
+            if venue_hotter
+            else "A plan built on the station alone would misjudge conditions there, "
+            "committing resources against a band the venue does not actually reach"
+        )
         return (
             f"{worst['zone_name']} reads {worst['zone_band']} band at "
             f"{worst['hour']:02d}:00 while {scenario.station.name} reads "
-            f"{worst['station_band']}. A plan built on the station alone would not "
-            f"trigger any action there, and {len(disagreements)} zone-hours disagree "
-            f"across the event window."
+            f"{worst['station_band']}. {consequence}, and {len(disagreements)} "
+            f"zone-hours disagree across the event window."
         )
 
     if max_spread >= 1.0:

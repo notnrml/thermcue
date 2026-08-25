@@ -487,21 +487,27 @@ confirmations is worse than no table.
 
 ### Validation against the single station
 
-This is the sponsor-hero result.
+This is the sponsor-hero result, and it does not point the way I expected.
 
 Maximum intra-venue **air-temperature** spread is **0.07 °C** — consistent with
 the scale measurement above, and an honest result rather than a flattering one.
-But **25 zone-hours disagree with Sky Harbor on band**, because band assignment
+But **19 zone-hours disagree with Sky Harbor on band**, because band assignment
 runs on WBGT, and WBGT carries the shade and radiant terms the station cannot
 see:
 
-> Civic Plaza reads **Extreme** band at 15:00 while Phoenix Sky Harbor
-> International Airport reads **Moderate**. A plan built on the station alone
-> would not trigger any action there.
+> Civic Plaza reads high band at 16:00 while Phoenix Sky Harbor International Airport (KPHX) reads extreme. A plan built on the station alone would misjudge conditions there, committing resources against a band the venue does not actually reach, and 19 zone-hours disagree across the event window.
 
-An operator working from the airport reading would have staffed that hour
-normally. The venue's own hottest zone was two bands above what they were
-looking at.
+Note the direction: the **airport reads hotter than the venue**, not cooler. Sky
+Harbor is an open airfield with no shade at all, while the venue sits among
+downtown buildings that put a third to a half of it in shadow through the
+afternoon. An operator working from the station would have over-triaged the venue
+here — and on a different day, with the sun higher and the buildings casting
+less, the error runs the other way.
+
+Either direction is the same failure: **the station is not measuring the place
+where the people are.** That is the argument, and it survives a flat
+air-temperature field precisely because the product indexes on WBGT rather than
+on a thermometer reading.
 
 ### The agent
 

@@ -1,6 +1,6 @@
 # Headline results
 
-Measured **2026-08-25 06:21 UTC** by `engine/scripts/headline.py`, seed `20260829`.
+Measured **2026-08-25 06:34 UTC** by `engine/scripts/headline.py`, seed `20260829`.
 
 > These figures depend on a live forecast for an event four days out, and that forecast moves. Regenerate with `.venv/bin/python scripts/headline.py` rather than trusting a stale copy.
 
@@ -54,7 +54,7 @@ Candidate plans simulated: **3,245**.
 - Maximum intra-venue air-temperature spread: **0.07 C**
 - Zone-hours where the venue and Phoenix Sky Harbor International Airport (KPHX) disagree on band: **19**
 
-> Civic Plaza reads high band at 16:00 while Phoenix Sky Harbor International Airport (KPHX) reads extreme. A plan built on the station alone would not trigger any action there, and 19 zone-hours disagree across the event window.
+> Civic Plaza reads high band at 16:00 while Phoenix Sky Harbor International Airport (KPHX) reads extreme. A plan built on the station alone would misjudge conditions there, committing resources against a band the venue does not actually reach, and 19 zone-hours disagree across the event window.
 
 ## Provenance
 
