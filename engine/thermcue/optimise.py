@@ -194,6 +194,7 @@ def propose_staffing(
     scenario: Scenario,
     thermal: ThermalField,
     count: int = STAFFING_PROPOSALS,
+    seed_for_solver: int = 0,
 ) -> list[dict[str, dict[int, int]]]:
     """Integer staffing allocations from CP-SAT, honouring every hard limit.
 
@@ -333,8 +334,20 @@ def propose_staffing(
         model.Maximize(sum(terms))
 
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = 2.0
-        solver.parameters.num_search_workers = 4
+        # Determinism over speed. Multi-worker CP-SAT races its workers and
+        # returns whichever equally-optimal solution finishes first, so the
+        # staffing proposals differed between runs on byte-identical inputs and
+        # the headline moved from 22.83 % to 17.20 % with nothing changed. The
+        # submission requires seed-reproducible numbers, and a search seeded off
+        # a coin flip is not seeded. One worker plus a deterministic time limit
+        # makes the whole pipeline reproducible from the cache alone.
+        #
+        # 2.0 deterministic units, not more: swept against 1.0 and 4.0, this is
+        # the smallest budget that converges to the same solution as 4.0, and it
+        # keeps a full optimisation at about 14 s against 71 s at 20.0.
+        solver.parameters.num_search_workers = 1
+        solver.parameters.max_deterministic_time = 2.0
+        solver.parameters.random_seed = seed_for_solver
         status = solver.Solve(model)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             continue
