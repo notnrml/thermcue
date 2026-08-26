@@ -129,6 +129,7 @@ class SimResult:
                 arrivals = sum(series.arrivals[window])
                 queue_minutes = sum(series.queue[window])
                 served = sum(series.served[window])
+                window_minutes = max(1, min(offset + 60, total_minutes) - offset)
                 # Mean wait experienced by those served in this hour, by Little's
                 # law over the hour. Reported as zero when nobody was served,
                 # rather than dividing by zero and rendering NaN in a chart.
@@ -138,6 +139,11 @@ class SimResult:
                         "gate_id": gate_id,
                         "hour": self.start_hour + offset // 60,
                         "arrivals": int(round(arrivals)),
+                        # Queue length is a time average, not person-minutes
+                        # divided by experienced wait. Keeping it explicit
+                        # prevents the UI from displaying the number served as
+                        # though it were the number waiting.
+                        "queue_length": round(queue_minutes / window_minutes, 1),
                         "wait_time_minutes": round(mean_wait, 2),
                         "person_minutes": round(queue_minutes, 1),
                     }

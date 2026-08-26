@@ -210,6 +210,10 @@ class TestMetric:
         rows = simulate_fast(scenario, baseline_plan, thermal).hourly_rows()
         assert len(rows) == len(scenario.gates) * len(scenario.hours)
         assert {r["hour"] for r in rows} == set(scenario.hours)
+        for row in rows:
+            assert row["queue_length"] == pytest.approx(
+                row["person_minutes"] / 60.0, abs=0.06
+            )
 
     def test_hourly_wait_is_zero_rather_than_nan_when_nobody_is_served(
         self, scenario, thermal

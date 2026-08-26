@@ -172,6 +172,26 @@ class TestOptimiser:
         assert gate_changes
         assert any(c.predicted_queue > 0 for c in gate_changes)
 
+    def test_staff_reallocation_is_one_feasible_counterfactual(
+        self, scenario, optimisation
+    ):
+        """A fixed-headcount transfer must never be attributed by reverting
+        only its donor or receiver, which would create the wrong staff total."""
+
+        staff_changes = [c for c in optimisation.changes if c.kind == "staff"]
+        assert len(staff_changes) <= 1
+        if staff_changes:
+            change = staff_changes[0]
+            assert change.action.startswith("Reallocate staff:")
+            assert change.raw["kind"] == "staff_reallocation"
+            assert len(change.raw["staff_runs"]) >= 2
+            for block in range(block_count(scenario)):
+                total = sum(
+                    optimisation.optimised.plan.staff_at(gate.id, block)
+                    for gate in scenario.gates
+                )
+                assert total == scenario.limits.total_staff
+
     def test_counterfactual_shares_are_normalised(self, scenario, optimisation):
         result = optimisation
         total = sum(c.counterfactual_share_pct for c in result.changes)

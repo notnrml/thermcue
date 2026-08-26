@@ -371,11 +371,12 @@ async def build_thermal_bundle(
     shade = compute_shaded_fractions(
         scenario, buildings[0] if buildings else None, buildings[1] if buildings else 0
     )
-    shade = apply_vegetation_refinement(shade, load_zone_drivers(), scenario.zones)
+    drivers = load_zone_drivers()
+    shade = apply_vegetation_refinement(shade, drivers, scenario.zones)
     notes.extend(shade.notes)
     sources["shade"] = shade.method
-
-    drivers = load_zone_drivers()
+    if any(entry.get("driver_score") is not None for entry in drivers.values()):
+        sources["surface_drivers"] = "research/zone_heat_drivers.json"
     by_hour = venue.by_hour()
     zone_hours: list[ZoneHourThermal] = []
     bands: dict[str, dict[int, str]] = {}

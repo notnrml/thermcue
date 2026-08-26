@@ -5,3 +5,9 @@ out/
 .env
 .env.local
 *.log
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.research-venv/
+research/.ipynb_checkpoints/
+research/data/*.tmp

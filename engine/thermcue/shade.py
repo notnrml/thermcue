@@ -351,9 +351,46 @@ def load_zone_drivers(path: Path | None = None) -> dict[str, dict[str, Any]]:
     if not target.exists():
         return {}
     try:
-        return json.loads(target.read_text())
+        raw = json.loads(target.read_text())
     except (json.JSONDecodeError, OSError):
         return {}
+    if not isinstance(raw, dict):
+        return {}
+
+    fraction_fields = {
+        "impervious_frac",
+        "vegetation_frac",
+        "shade_structure_frac",
+        "water_frac",
+        "built_form_frac",
+        "bare_ground_frac",
+        "driver_score",
+    }
+    valid: dict[str, dict[str, Any]] = {}
+    for zone_id, entry in raw.items():
+        if not isinstance(zone_id, str) or not isinstance(entry, dict):
+            continue
+        candidate = dict(entry)
+        malformed = False
+        for field_name in fraction_fields:
+            value = candidate.get(field_name)
+            if value is None:
+                continue
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                malformed = True
+                break
+            if not 0.0 <= value <= 1.0:
+                malformed = True
+                break
+            candidate[field_name] = value
+        narrative = candidate.get("narrative")
+        if narrative is not None and not isinstance(narrative, str):
+            malformed = True
+        if not malformed:
+            valid[zone_id] = candidate
+    return valid
 
 
 def apply_vegetation_refinement(
@@ -375,7 +412,10 @@ def apply_vegetation_refinement(
         entry = drivers.get(zone.id)
         if not entry:
             continue
-        vegetation = float(entry.get("vegetation_frac", 0.0))
+        raw_vegetation = entry.get("vegetation_frac")
+        if raw_vegetation is None:
+            continue
+        vegetation = float(raw_vegetation)
         if vegetation <= 0.0:
             continue
         touched.append(zone.id)

@@ -851,6 +851,7 @@ def _atomic_changes(baseline: Plan, optimised: Plan, scenario: Scenario) -> list
         key = (change["gate_id"], change["before"], change["after"])
         staff_runs.setdefault(key, []).append(change["block"])
 
+    completed_staff_runs: list[dict[str, Any]] = []
     for (gate_id, before, after), blocks in staff_runs.items():
         blocks.sort()
         run_start = blocks[0]
@@ -859,9 +860,9 @@ def _atomic_changes(baseline: Plan, optimised: Plan, scenario: Scenario) -> list
             if block is not None and block == previous + 1:
                 previous = block
                 continue
-            grouped.append(
+            completed_staff_runs.append(
                 {
-                    "kind": "staff",
+                    "kind": "staff_run",
                     "gate_id": gate_id,
                     "gate_name": scenario.gate(gate_id).name,
                     "before": before,
@@ -872,6 +873,25 @@ def _atomic_changes(baseline: Plan, optimised: Plan, scenario: Scenario) -> list
             if block is not None:
                 run_start = block
                 previous = block
+
+    # Staffing changes are one constrained reallocation, not independent
+    # actions. Reverting only the donor or receiver creates a plan with the
+    # wrong total headcount, so its counterfactual cannot be interpreted. Keep
+    # every run together and revert the whole allocation as one feasible unit.
+    if completed_staff_runs:
+        grouped.append(
+            {
+                "kind": "staff_reallocation",
+                "staff_runs": completed_staff_runs,
+                "blocks": sorted(
+                    {
+                        block
+                        for run in completed_staff_runs
+                        for block in run["blocks"]
+                    }
+                ),
+            }
+        )
     return grouped
 
 
@@ -881,10 +901,13 @@ def _plan_without(change: dict[str, Any], optimised: Plan, baseline: Plan, scena
         offsets = dict(optimised.gate_open_offset_min)
         offsets[change["gate_id"]] = baseline.gate_open_offset_min.get(change["gate_id"], 0)
         return optimised.with_changes(gate_open_offset_min=offsets)
-    if change["kind"] == "staff":
+    if change["kind"] == "staff_reallocation":
         allocation = {g: dict(blocks) for g, blocks in optimised.staff_by_block.items()}
-        for block in change["blocks"]:
-            allocation[change["gate_id"]][block] = baseline.staff_at(change["gate_id"], block)
+        for run in change["staff_runs"]:
+            for block in run["blocks"]:
+                allocation[run["gate_id"]][block] = baseline.staff_at(
+                    run["gate_id"], block
+                )
         return optimised.with_changes(staff_by_block=allocation)
     if change["kind"] == "stagger":
         return optimised.with_changes(
@@ -944,17 +967,46 @@ def explain(
                 if minutes_earlier > 0
                 else f"Hold {gate.name} to its scheduled opening"
             )
-        elif kind == "staff":
-            gate = scenario.gate(change["gate_id"])
+        elif kind == "staff_reallocation":
+            # Explain the destination with the largest affected baseline queue,
+            # while naming every donor and receiver in the action. This makes
+            # the fixed-headcount trade-off visible instead of presenting a
+            # donor reduction as if it were independently beneficial.
+            runs = change["staff_runs"]
+            receivers = [run for run in runs if run["after"] > run["before"]]
+            candidates = receivers or runs
+
+            def affected_baseline_peak(run: dict[str, Any]) -> float:
+                series = baseline.result.gates[run["gate_id"]]
+                minutes = [
+                    minute
+                    for block in run["blocks"]
+                    for minute in range(
+                        block * scenario.limits.staff_block_minutes,
+                        (block + 1) * scenario.limits.staff_block_minutes,
+                    )
+                ]
+                return max((series.queue[m] for m in minutes), default=0.0)
+
+            focus = max(candidates, key=affected_baseline_peak)
+            gate = scenario.gate(focus["gate_id"])
             zone_id = gate.queue_zone
             hours = tuple(
-                sorted({h for b in change["blocks"] for h in _hours_for_block(scenario, b)})
+                sorted(
+                    {
+                        h
+                        for run in runs
+                        for block in run["blocks"]
+                        for h in _hours_for_block(scenario, block)
+                    }
+                )
             )
-            movement = change["after"] - change["before"]
-            action = (
-                f"Move {abs(movement)} staff {'to' if movement > 0 else 'from'} {gate.name} "
-                f"({change['before']} to {change['after']})"
+            allocation_text = "; ".join(
+                f"{run['gate_name']} {run['before']} to {run['after']}"
+                for run in sorted(runs, key=lambda row: row["gate_name"])
             )
+            action = f"Reallocate staff: {allocation_text}"
+            kind = "staff"
         elif kind == "stagger":
             zone_id = None
             hours = scenario.hours
@@ -984,8 +1036,9 @@ def explain(
         predicted_queue = 0.0
         averted_queue = 0.0
         if kind in ("gate", "staff"):
-            baseline_series = baseline.result.gates[change["gate_id"]]
-            optimised_series = optimised.result.gates[change["gate_id"]]
+            gate_id = gate.id
+            baseline_series = baseline.result.gates[gate_id]
+            optimised_series = optimised.result.gates[gate_id]
             window = [
                 m
                 for m in range(len(baseline_series.queue))
@@ -1008,6 +1061,13 @@ def explain(
                     + (f" (WBGT est {wbgt:.1f} C)" if wbgt is not None else "")
                 ),
                 binding_condition=(
+                    (
+                        f"Total staffing stays fixed at {scenario.limits.total_staff}: "
+                        f"{allocation_text}. {gate.name} has the largest affected "
+                        f"unchanged-plan queue at {predicted_queue:.0f} people"
+                    )
+                    if change["kind"] == "staff_reallocation"
+                    else
                     f"{scenario.zone(zone_id).name} reaches the {band} band at "
                     f"{peak_hour:02d}:00, where the unchanged plan queues "
                     f"{predicted_queue:.0f} people at this gate"

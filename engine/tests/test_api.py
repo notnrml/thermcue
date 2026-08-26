@@ -90,6 +90,47 @@ class TestScenario:
             assert {"id", "name", "coordinates", "capacity", "lanes", "staffCount",
                     "queueLength", "waitTimeMinutes"} <= set(gate)
 
+    def test_zone_driver_evidence_reaches_the_ui_contract(self, client):
+        """Every zone either carries real driver evidence or says it has none.
+
+        Asserts the contract, not a snapshot of how complete the dataset happened
+        to be. The first version of this test hardcoded which zones lacked
+        evidence, so it failed the moment Workstream 3's artefact was completed
+        for the remaining two - a test that breaks when the data it describes
+        gets better is testing the wrong thing.
+        """
+        zones = [
+            zone for zone in client.get("/scenario").json()["scenario"]["zones"]
+        ]
+        assert zones
+
+        for zone in zones:
+            score, narrative = zone["driverScore"], zone["driverNarrative"]
+            assert narrative, f"{zone['id']} must always explain its driver state"
+            if score is None:
+                # Absence must be declared, never rendered as a bare blank.
+                assert "No committed" in narrative or "unavailable" in narrative
+            else:
+                assert 0.0 <= score <= 1.0, zone["id"]
+                # A score has to say where it came from, or it is just a number.
+                assert "FortyGuard" in narrative or "satellite" in narrative
+
+    def test_zone_drivers_make_no_temperature_claim(self, client):
+        """Driver narratives describe surfaces, never degrees.
+
+        Measured intra-venue air-temperature spread at this venue is 0.044 C, so
+        a per-zone degree claim in a driver narrative would not be supportable -
+        and the brief's own example narrative ("runs 2.1 C above venue mean") is
+        exactly the claim we cannot make.
+        """
+        import re
+
+        for zone in client.get("/scenario").json()["scenario"]["zones"]:
+            narrative = zone["driverNarrative"] or ""
+            assert not re.search(r"\d+(\.\d+)?\s*(°\s*)?C\b", narrative), (
+                f"{zone['id']} driver narrative makes a temperature claim: {narrative}"
+            )
+
 
 class TestThermal:
     def test_thermal_states_freshness_and_signal_presence(self, client):
@@ -121,7 +162,7 @@ class TestSimulate:
     def test_simulate_returns_camel_case_queue_states(self, client):
         body = client.post("/simulate?plan=baseline&monte_carlo_n=10").json()
         assert body["queueStates"]
-        assert {"gateId", "hour", "arrivals", "waitTimeMinutes", "personMinutes"} == set(
+        assert {"gateId", "hour", "arrivals", "queueLength", "waitTimeMinutes", "personMinutes"} == set(
             body["queueStates"][0]
         )
 
@@ -200,6 +241,29 @@ class TestValidation:
         for point in client.get("/validation").json()["points"]:
             assert {"hour", "zoneId", "zoneTempC", "stationTempC"} == set(point)
 
+    def test_observed_validation_is_independent_and_explicitly_partial(self, client):
+        """Measured station evidence must not be confused with derived WBGT."""
+        response = client.get("/validation/observed")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] in ("complete", "partial")
+        assert body["expectedStationHours"] == 84
+        assert body["observedStationHours"] == 84
+        assert body["pairedStationHours"] == body["fortyguard"]["n"]
+        assert body["comparableStationHours"] == body["fortyguardComparable"]["n"]
+        assert body["comparableStationHours"] == body["airportBaseline"]["n"]
+        assert "ASOS/METAR" in body["stationSource"]
+        assert body["fortyguardSource"].startswith("FortyGuard /v1/heatmap")
+        joined = " ".join(body["limitations"]).lower()
+        assert "does not validate estimated wbgt" in joined
+
+    def test_observed_pairs_carry_raw_provenance(self, client):
+        for pair in client.get("/validation/observed").json()["pairs"]:
+            assert pair["observationTimeLocal"]
+            assert pair["fortyguardActivityId"]
+            assert pair["fortyguardCacheFile"].startswith("engine/data/cache/")
+            assert pair["stationToTileDistanceM"] <= 150
+
 
 class TestPlanWorkspace:
     def test_plan_returns_the_whole_ui_contract_in_one_call(self, client):
@@ -210,6 +274,13 @@ class TestPlanWorkspace:
             "wbgtHourly",
         }
         assert expected <= set(body)
+
+    def test_plan_carries_measured_validation_summary_separately(self, client):
+        report = client.get("/plan").json()["observedValidation"]
+        assert report["status"] in ("complete", "partial")
+        assert report["observedStationHours"] == report["expectedStationHours"]
+        assert report["comparableStationHours"] == report["fortyguardComparable"]["n"]
+        assert report["comparableStationHours"] == report["airportBaseline"]["n"]
 
     def test_meta_carries_provenance_and_the_seed(self, client):
         meta = client.get("/plan").json()["meta"]

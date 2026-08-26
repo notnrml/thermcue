@@ -7,6 +7,7 @@ import type {
   KpiSet,
   ParetoPoint,
   PlanChange,
+  ObservedValidationSummary,
   ValidationPoint,
   ValidationSummary,
   Zone,
@@ -31,6 +32,7 @@ interface RightRailProps {
   simulating: boolean;
   validationPoints: ValidationPoint[];
   validationSummary: ValidationSummary;
+  observedValidation?: ObservedValidationSummary | null;
   zones: Zone[];
   timezone: string;
 }
@@ -94,6 +96,7 @@ export default function RightRail(props: RightRailProps) {
           tabs={[
             { id: "compare", label: "Compare" },
             { id: "agent", label: "Agent" },
+            { id: "drivers", label: "Drivers" },
             { id: "validation", label: "Validation" },
           ]}
           value={tab}
@@ -104,6 +107,7 @@ export default function RightRail(props: RightRailProps) {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "compare" ? <CompareTab {...props} /> : null}
         {tab === "agent" ? <AgentTab {...props} /> : null}
+        {tab === "drivers" ? <DriversTab {...props} /> : null}
         {tab === "validation" ? <ValidationTab {...props} /> : null}
       </div>
     </div>
@@ -222,20 +226,100 @@ function AgentTab({
   );
 }
 
-function ValidationTab({
-  validationPoints,
-  validationSummary,
-  zones,
-}: RightRailProps) {
+function DriversTab({ zones }: RightRailProps) {
   return (
     <div className="space-y-4">
       <section>
         <h3 className="mb-1 text-body font-semibold text-base-text">
-          Zone temperatures against the airport station
+          Physical heat drivers by zone
+        </h3>
+        <p className="text-caption text-base-muted">
+          FortyGuard satellite segmentation, cross-checked with annual TESSERA
+          surface embeddings. Scores describe structural exposure; they are not
+          temperatures or forecasts.
+        </p>
+      </section>
+
+      {zones.map((zone) => {
+        const available = zone.driverScore != null;
+        return (
+          <section
+            key={zone.id}
+            className="rounded-card border border-base-border bg-base-elevated p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h4 className="text-body font-semibold text-base-text">
+                {zone.name}
+              </h4>
+              <span
+                className={
+                  available
+                    ? "rounded-pill bg-wbgt-high/15 px-2 py-1 font-mono text-caption text-wbgt-high"
+                    : "rounded-pill bg-base-bg px-2 py-1 text-caption text-base-muted"
+                }
+              >
+                {available
+                  ? `Driver ${Math.round((zone.driverScore ?? 0) * 100)}`
+                  : "Evidence unavailable"}
+              </span>
+            </div>
+            <p className="mt-2 text-body text-base-secondary">
+              {zone.driverNarrative ??
+                "No committed zone-driver evidence is available; no surface claim is made."}
+            </p>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function ValidationTab({
+  validationPoints,
+  validationSummary,
+  observedValidation,
+  zones,
+}: RightRailProps) {
+  /* The two studies below look contradictory and are not, so the panel states
+   * the relationship rather than leaving a reader to reconcile them. Ameer's
+   * station study finds FortyGuard no more accurate than the airport on air
+   * temperature; the venue panel finds zone-hours landing in a different heat
+   * band from the airport. Both are true because air temperature is well mixed
+   * at these separations while radiant load is not, and the second is what
+   * WBGT carries. Presented in that order it is one argument, not two claims. */
+  return (
+    <div className="space-y-4">
+      <section>
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Step 1. Is FortyGuard a better thermometer than the airport?
         </h3>
         <p className="mb-2 text-caption text-base-muted">
-          Per-zone FortyGuard readings across the day, with the single
-          Phoenix Sky Harbor station value dashed.
+          Measured against independent ASOS sensors, at their own locations.
+        </p>
+        <ObservedValidationCard report={observedValidation} />
+      </section>
+
+      <section className="rounded-card border-l border-base-border bg-base-elevated p-4">
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Step 2. Why that is the expected answer
+        </h3>
+        <p className="text-caption text-base-secondary">
+          Air temperature is well mixed at these distances. Measured on
+          FortyGuard tiles across the study area: 0.04 C within the venue,
+          0.06 C from the venue to the airport, and 2.42 C only once you reach
+          South Mountain 12 km away. A thermometer 4.5 km away is a good proxy
+          for another thermometer. That was never the gap.
+        </p>
+      </section>
+
+      <section>
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Step 3. What the airport cannot see
+        </h3>
+        <p className="mb-2 text-caption text-base-muted">
+          Heat band runs on WBGT, which carries shade and radiant load. The
+          chart compares modelled venue zones with the airport reference; it is
+          a planning-model comparison, not field validation of WBGT or queues.
         </p>
         <div className="rounded-card border border-base-border bg-base-bg p-2">
           <ValidationChart points={validationPoints} zones={zones} />
@@ -251,14 +335,95 @@ function ValidationTab({
         </p>
       </section>
 
-      <section className="rounded-card border border-wbgt-high/40 bg-wbgt-high/10 p-4">
+      {/* Neutral surface, not a heat tint. The brand document reserves the
+        * band colours for band meaning; using wbgt-high as an alert background
+        * here would imply this callout is itself a High reading. */}
+      <section className="rounded-card border border-base-border bg-base-elevated p-4">
         <p className="text-body font-semibold text-base-text">
-          Plan built on station data alone differs:
+          A plan built on station data alone differs
         </p>
         <p className="mt-1 text-body text-base-secondary">
           {validationSummary.verdictDecision}
         </p>
+        <p className="mt-3 border-t border-base-border pt-3 text-caption text-base-muted">
+          So the claim is not that we read a better thermometer. It is that the
+          venue carries heat structure a thermometer cannot resolve, and the
+          operating plan is built on that structure.
+        </p>
       </section>
     </div>
   );
+}
+
+function ObservedValidationCard({
+  report,
+}: {
+  report?: ObservedValidationSummary | null;
+}) {
+  if (!report) {
+    return (
+      <section className="rounded-card border border-base-border bg-base-elevated p-4">
+        <span className="text-label uppercase tracking-wide text-base-muted">
+          Independent temperature check
+        </span>
+        <p className="mt-2 text-body text-base-secondary">
+          No measured station report is loaded in this workspace. The full
+          check is available from the engine when its report is present.
+        </p>
+      </section>
+    );
+  }
+
+  const local = report.fortyguardComparable;
+  const airport = report.airportBaseline;
+  return (
+    <section className="rounded-card border border-base-border bg-base-elevated p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="text-label uppercase tracking-wide text-base-muted">
+            Independent temperature check
+          </span>
+          <p className="mt-1 text-caption text-base-muted">
+            Real ASOS/METAR readings matched to same-hour FortyGuard tiles.
+          </p>
+        </div>
+        <span className="rounded-pill bg-wbgt-high/15 px-2 py-1 text-caption uppercase text-wbgt-high">
+          {report.status}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Metric label="Station hours" value={`${report.observedStationHours}/${report.expectedStationHours}`} />
+        <Metric label="FG tiles matched" value={`${report.pairedStationHours}/${report.expectedStationHours}`} />
+        <Metric label="Fair rows" value={`${report.comparableStationHours}`} />
+        <Metric label="FG wins" value={`${report.fortyguardBetterCount}–${report.airportBetterCount}`} />
+      </div>
+
+      <div className="mt-3 border-t border-base-border pt-3 text-caption text-base-secondary">
+        <p>
+          On the same {report.comparableStationHours} rows: FortyGuard MAE{" "}
+          <span className="font-mono text-base-text">{formatMetric(local.maeC)} C</span>;
+          reuse airport MAE{" "}
+          <span className="font-mono text-base-text">{formatMetric(airport.maeC)} C</span>.
+        </p>
+        <p className="mt-1 text-base-muted">
+          This checks the temperature connection only. It does not validate
+          venue WBGT, queue forecasts or the benefit of a recommendation.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-card border border-base-border bg-base-bg p-2">
+      <span className="block text-label uppercase tracking-wide text-base-muted">{label}</span>
+      <span className="font-mono text-body text-base-text">{value}</span>
+    </div>
+  );
+}
+
+function formatMetric(value: number | null): string {
+  return value == null ? "—" : value.toFixed(2);
 }

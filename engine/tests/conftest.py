@@ -59,3 +59,26 @@ def optimisation(scenario, thermal):
     from thermcue.optimise import run_full_optimisation
 
     return run_full_optimisation(scenario, thermal)
+
+
+def _add_repo_root_to_path() -> None:
+    """Make ``research/`` importable from a suite that runs inside ``engine/``.
+
+    tests/test_queue_log_evaluator.py imports research.scripts.*, which resolves
+    only when the repository root is on sys.path. Running pytest from engine/ -
+    which is what the README, the Dockerfile and every other instruction in this
+    repo tell you to do - it is not, so the whole suite failed at collection with
+    ModuleNotFoundError. Not one test: collection, so nothing ran at all.
+
+    Fixed here rather than by moving the scripts, because research/ is
+    Workstream 3's directory and the engine treats it as read-only input.
+    """
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+
+_add_repo_root_to_path()
