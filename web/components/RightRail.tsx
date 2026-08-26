@@ -280,15 +280,46 @@ function ValidationTab({
   observedValidation,
   zones,
 }: RightRailProps) {
+  /* The two studies below look contradictory and are not, so the panel states
+   * the relationship rather than leaving a reader to reconcile them. Ameer's
+   * station study finds FortyGuard no more accurate than the airport on air
+   * temperature; the venue panel finds zone-hours landing in a different heat
+   * band from the airport. Both are true because air temperature is well mixed
+   * at these separations while radiant load is not, and the second is what
+   * WBGT carries. Presented in that order it is one argument, not two claims. */
   return (
     <div className="space-y-4">
       <section>
         <h3 className="mb-1 text-body font-semibold text-base-text">
-          Planning-model comparison
+          Step 1. Is FortyGuard a better thermometer than the airport?
         </h3>
         <p className="mb-2 text-caption text-base-muted">
-          The chart compares modelled venue zones with the airport reference.
-          It is not field validation of WBGT or queues.
+          Measured against independent ASOS sensors, at their own locations.
+        </p>
+        <ObservedValidationCard report={observedValidation} />
+      </section>
+
+      <section className="rounded-card border-l border-base-border bg-base-elevated p-4">
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Step 2. Why that is the expected answer
+        </h3>
+        <p className="text-caption text-base-secondary">
+          Air temperature is well mixed at these distances. Measured on
+          FortyGuard tiles across the study area: 0.04 C within the venue,
+          0.06 C from the venue to the airport, and 2.42 C only once you reach
+          South Mountain 12 km away. A thermometer 4.5 km away is a good proxy
+          for another thermometer. That was never the gap.
+        </p>
+      </section>
+
+      <section>
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Step 3. What the airport cannot see
+        </h3>
+        <p className="mb-2 text-caption text-base-muted">
+          Heat band runs on WBGT, which carries shade and radiant load. The
+          chart compares modelled venue zones with the airport reference; it is
+          a planning-model comparison, not field validation of WBGT or queues.
         </p>
         <div className="rounded-card border border-base-border bg-base-bg p-2">
           <ValidationChart points={validationPoints} zones={zones} />
@@ -304,16 +335,22 @@ function ValidationTab({
         </p>
       </section>
 
-      <section className="rounded-card border border-wbgt-high/40 bg-wbgt-high/10 p-4">
+      {/* Neutral surface, not a heat tint. The brand document reserves the
+        * band colours for band meaning; using wbgt-high as an alert background
+        * here would imply this callout is itself a High reading. */}
+      <section className="rounded-card border border-base-border bg-base-elevated p-4">
         <p className="text-body font-semibold text-base-text">
-          Plan built on station data alone differs:
+          A plan built on station data alone differs
         </p>
         <p className="mt-1 text-body text-base-secondary">
           {validationSummary.verdictDecision}
         </p>
+        <p className="mt-3 border-t border-base-border pt-3 text-caption text-base-muted">
+          So the claim is not that we read a better thermometer. It is that the
+          venue carries heat structure a thermometer cannot resolve, and the
+          operating plan is built on that structure.
+        </p>
       </section>
-
-      <ObservedValidationCard report={observedValidation} />
     </div>
   );
 }

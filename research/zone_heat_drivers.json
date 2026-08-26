@@ -1,0 +1,125 @@
+{
+  "_meta": {
+    "_generated_by": "research/scripts/build_zone_drivers.py",
+    "_limitations": [
+      "The segmentation crop is 225x225 px around each zone centroid, which at this venue is wider than the zone. Two centroids 350 m apart returned 82.9 % and 82.0 % building because both crops are dominated by the same downtown blocks, so these fractions describe the district around a zone rather than the zone itself.",
+      "driver_score is a structural exposure index over surface composition. It is not a temperature, not an anomaly and not a forecast.",
+      "No narrative here makes a temperature claim. Measured intra-venue air-temperature spread at this venue is 0.044 C, so a per-zone degree claim would not be supportable.",
+      "Segmentation is a single-date snapshot. Surfaces change slowly, but temporary event infrastructure is not in it."
+    ],
+    "_source": "FortyGuard POST /v1/satellite (Premium), land-cover segmentation",
+    "_study_date": "2026-08-14",
+    "_study_hour": "17:00"
+  },
+  "z-concourse": {
+    "activity_id": "5627524c-7484-4b18-b419-c362bcb92f32",
+    "driver_score": 0.5096,
+    "freshness": "cached",
+    "impervious_frac": 0.5797,
+    "narrative": "Mostly impervious (58 %) with some relief against 7 % vegetation, from FortyGuard satellite segmentation on 2026-08-14. Describes the district around North Concourse; the crop is wider than the zone.",
+    "other_frac": 0.3502,
+    "segments_pct": {
+      "earth, ground": 34.54,
+      "fence": 1.99,
+      "house": 37.82,
+      "others": 0.48,
+      "plant": 6.16,
+      "road, route": 18.17,
+      "tree": 0.85
+    },
+    "shade_structure_frac": 0.3782,
+    "source": "fortyguard:/v1/satellite",
+    "study_date": "2026-08-14",
+    "study_hour": "17:00",
+    "vegetation_frac": 0.0701
+  },
+  "z-lawn": {
+    "activity_id": "3ca38c34-6f8e-4693-b102-d522d69d1c8d",
+    "driver_score": 0.6621,
+    "freshness": "cached",
+    "impervious_frac": 0.8196,
+    "narrative": "Mostly impervious (82 %) with some relief against 16 % vegetation, from FortyGuard satellite segmentation on 2026-08-14. Describes the district around Event Lawn; the crop is wider than the zone.",
+    "other_frac": 0.0229,
+    "segments_pct": {
+      "building": 81.96,
+      "earth, ground": 1.54,
+      "grass": 7.54,
+      "others": 0.75,
+      "plant": 3.35,
+      "tree": 4.86
+    },
+    "shade_structure_frac": 0.8196,
+    "source": "fortyguard:/v1/satellite",
+    "study_date": "2026-08-14",
+    "study_hour": "17:00",
+    "vegetation_frac": 0.1575
+  },
+  "z-plaza": {
+    "activity_id": "4b127814-3dbf-4890-a160-9325522b6bd7",
+    "driver_score": 0.7625,
+    "freshness": "cached",
+    "impervious_frac": 0.8755,
+    "narrative": "Dominated by impervious surface (88 %) against 11 % vegetation, from FortyGuard satellite segmentation on 2026-08-14. Describes the district around Civic Plaza; the crop is wider than the zone.",
+    "other_frac": 0.0115,
+    "segments_pct": {
+      "building": 82.93,
+      "earth, ground": 1.02,
+      "grass": 2.79,
+      "others": 0.13,
+      "plant": 0.51,
+      "road, route": 4.62,
+      "tree": 8.0
+    },
+    "shade_structure_frac": 0.8293,
+    "source": "fortyguard:/v1/satellite",
+    "study_date": "2026-08-14",
+    "study_hour": "17:00",
+    "vegetation_frac": 0.113
+  },
+  "z-staff": {
+    "activity_id": "7790d386-d92b-4063-be2d-557b4d10fb20",
+    "driver_score": 0.5248,
+    "freshness": "live",
+    "impervious_frac": 0.5881,
+    "narrative": "Mostly impervious (59 %) with some relief against 6 % vegetation, from FortyGuard satellite segmentation on 2026-08-14. Describes the district around Staff Compound; the crop is wider than the zone.",
+    "other_frac": 0.3486,
+    "segments_pct": {
+      "building": 54.23,
+      "earth, ground": 7.07,
+      "fence": 0.93,
+      "grass": 3.25,
+      "others": 27.79,
+      "plant": 1.06,
+      "road, route": 3.65,
+      "tree": 2.02
+    },
+    "shade_structure_frac": 0.5423,
+    "source": "fortyguard:/v1/satellite",
+    "study_date": "2026-08-14",
+    "study_hour": "17:00",
+    "vegetation_frac": 0.0633
+  },
+  "z-west-queue": {
+    "activity_id": "4a632bea-5a71-4c98-928f-bc135aa797e2",
+    "driver_score": 0.3342,
+    "freshness": "live",
+    "impervious_frac": 0.6084,
+    "narrative": "Mixed surface, 61 % impervious against 27 % vegetation, from FortyGuard satellite segmentation on 2026-08-14. Describes the district around West Queue; the crop is wider than the zone.",
+    "other_frac": 0.1174,
+    "segments_pct": {
+      "building": 44.36,
+      "car": 0.83,
+      "earth, ground": 10.67,
+      "grass": 14.62,
+      "others": 0.24,
+      "plant": 4.72,
+      "road, route": 16.48,
+      "tree": 8.08
+    },
+    "shade_structure_frac": 0.4436,
+    "source": "fortyguard:/v1/satellite",
+    "study_date": "2026-08-14",
+    "study_hour": "17:00",
+    "vegetation_frac": 0.2742
+  }
+}

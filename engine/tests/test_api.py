@@ -91,16 +91,45 @@ class TestScenario:
                     "queueLength", "waitTimeMinutes"} <= set(gate)
 
     def test_zone_driver_evidence_reaches_the_ui_contract(self, client):
-        zones = {
-            zone["id"]: zone
-            for zone in client.get("/scenario").json()["scenario"]["zones"]
-        }
-        for zone_id in ("z-plaza", "z-concourse", "z-lawn"):
-            assert 0.0 <= zones[zone_id]["driverScore"] <= 1.0
-            assert "satellite view" in zones[zone_id]["driverNarrative"]
-        for zone_id in ("z-west-queue", "z-staff"):
-            assert zones[zone_id]["driverScore"] is None
-            assert "No committed" in zones[zone_id]["driverNarrative"]
+        """Every zone either carries real driver evidence or says it has none.
+
+        Asserts the contract, not a snapshot of how complete the dataset happened
+        to be. The first version of this test hardcoded which zones lacked
+        evidence, so it failed the moment Workstream 3's artefact was completed
+        for the remaining two - a test that breaks when the data it describes
+        gets better is testing the wrong thing.
+        """
+        zones = [
+            zone for zone in client.get("/scenario").json()["scenario"]["zones"]
+        ]
+        assert zones
+
+        for zone in zones:
+            score, narrative = zone["driverScore"], zone["driverNarrative"]
+            assert narrative, f"{zone['id']} must always explain its driver state"
+            if score is None:
+                # Absence must be declared, never rendered as a bare blank.
+                assert "No committed" in narrative or "unavailable" in narrative
+            else:
+                assert 0.0 <= score <= 1.0, zone["id"]
+                # A score has to say where it came from, or it is just a number.
+                assert "FortyGuard" in narrative or "satellite" in narrative
+
+    def test_zone_drivers_make_no_temperature_claim(self, client):
+        """Driver narratives describe surfaces, never degrees.
+
+        Measured intra-venue air-temperature spread at this venue is 0.044 C, so
+        a per-zone degree claim in a driver narrative would not be supportable -
+        and the brief's own example narrative ("runs 2.1 C above venue mean") is
+        exactly the claim we cannot make.
+        """
+        import re
+
+        for zone in client.get("/scenario").json()["scenario"]["zones"]:
+            narrative = zone["driverNarrative"] or ""
+            assert not re.search(r"\d+(\.\d+)?\s*(°\s*)?C\b", narrative), (
+                f"{zone['id']} driver narrative makes a temperature claim: {narrative}"
+            )
 
 
 class TestThermal:
