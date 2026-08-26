@@ -29,6 +29,10 @@ export interface Zone {
   temperatureC: number;
   /** Fraction of the zone under shade, 0 to 1. */
   shadeCoverage: number;
+  /** Workstream 3 structural heat-risk score; null when evidence is missing. */
+  driverScore?: number | null;
+  /** Evidence-grounded explanation of the zone's physical heat drivers. */
+  driverNarrative?: string | null;
 }
 
 /** Per-zone state for a single hour; drives the time slider scrub. */
@@ -83,6 +87,8 @@ export interface QueueState {
   gateId: string;
   hour: number;
   arrivals: number;
+  /** Time-average number of people waiting during the hour. */
+  queueLength: number;
   waitTimeMinutes: number;
   /** Total person-minutes spent queueing in this hour. */
   personMinutes: number;
@@ -129,6 +135,29 @@ export interface ValidationSummary {
   maxIntraVenueSpreadC: number;
   /** The decision that flips if the plan is built on station data alone. */
   verdictDecision: string;
+}
+
+export interface ErrorMetrics {
+  n: number;
+  maeC: number | null;
+  biasC: number | null;
+  rmseC: number | null;
+  maxAbsErrorC?: number | null;
+}
+
+export interface ObservedValidationSummary {
+  status: "complete" | "partial" | "unavailable";
+  studyName: string;
+  expectedStationHours: number;
+  observedStationHours: number;
+  pairedStationHours: number;
+  comparableStationHours: number;
+  fortyguardComparable: ErrorMetrics;
+  airportBaseline: ErrorMetrics;
+  fortyguardBetterCount: number;
+  airportBetterCount: number;
+  tieCount: number;
+  limitations: string[];
 }
 
 /** Venue-max WBGT per hour with the Monte Carlo envelope. */
@@ -182,4 +211,5 @@ export interface PlanWorkspaceData {
   validationPoints: ValidationPoint[];
   validationSummary: ValidationSummary;
   wbgtHourly: WbgtHourly[];
+  observedValidation?: ObservedValidationSummary | null;
 }

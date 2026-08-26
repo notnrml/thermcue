@@ -90,6 +90,18 @@ class TestScenario:
             assert {"id", "name", "coordinates", "capacity", "lanes", "staffCount",
                     "queueLength", "waitTimeMinutes"} <= set(gate)
 
+    def test_zone_driver_evidence_reaches_the_ui_contract(self, client):
+        zones = {
+            zone["id"]: zone
+            for zone in client.get("/scenario").json()["scenario"]["zones"]
+        }
+        for zone_id in ("z-plaza", "z-concourse", "z-lawn"):
+            assert 0.0 <= zones[zone_id]["driverScore"] <= 1.0
+            assert "satellite view" in zones[zone_id]["driverNarrative"]
+        for zone_id in ("z-west-queue", "z-staff"):
+            assert zones[zone_id]["driverScore"] is None
+            assert "No committed" in zones[zone_id]["driverNarrative"]
+
 
 class TestThermal:
     def test_thermal_states_freshness_and_signal_presence(self, client):
@@ -121,7 +133,7 @@ class TestSimulate:
     def test_simulate_returns_camel_case_queue_states(self, client):
         body = client.post("/simulate?plan=baseline&monte_carlo_n=10").json()
         assert body["queueStates"]
-        assert {"gateId", "hour", "arrivals", "waitTimeMinutes", "personMinutes"} == set(
+        assert {"gateId", "hour", "arrivals", "queueLength", "waitTimeMinutes", "personMinutes"} == set(
             body["queueStates"][0]
         )
 
@@ -200,6 +212,29 @@ class TestValidation:
         for point in client.get("/validation").json()["points"]:
             assert {"hour", "zoneId", "zoneTempC", "stationTempC"} == set(point)
 
+    def test_observed_validation_is_independent_and_explicitly_partial(self, client):
+        """Measured station evidence must not be confused with derived WBGT."""
+        response = client.get("/validation/observed")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] in ("complete", "partial")
+        assert body["expectedStationHours"] == 84
+        assert body["observedStationHours"] == 84
+        assert body["pairedStationHours"] == body["fortyguard"]["n"]
+        assert body["comparableStationHours"] == body["fortyguardComparable"]["n"]
+        assert body["comparableStationHours"] == body["airportBaseline"]["n"]
+        assert "ASOS/METAR" in body["stationSource"]
+        assert body["fortyguardSource"].startswith("FortyGuard /v1/heatmap")
+        joined = " ".join(body["limitations"]).lower()
+        assert "does not validate estimated wbgt" in joined
+
+    def test_observed_pairs_carry_raw_provenance(self, client):
+        for pair in client.get("/validation/observed").json()["pairs"]:
+            assert pair["observationTimeLocal"]
+            assert pair["fortyguardActivityId"]
+            assert pair["fortyguardCacheFile"].startswith("engine/data/cache/")
+            assert pair["stationToTileDistanceM"] <= 150
+
 
 class TestPlanWorkspace:
     def test_plan_returns_the_whole_ui_contract_in_one_call(self, client):
@@ -210,6 +245,13 @@ class TestPlanWorkspace:
             "wbgtHourly",
         }
         assert expected <= set(body)
+
+    def test_plan_carries_measured_validation_summary_separately(self, client):
+        report = client.get("/plan").json()["observedValidation"]
+        assert report["status"] in ("complete", "partial")
+        assert report["observedStationHours"] == report["expectedStationHours"]
+        assert report["comparableStationHours"] == report["fortyguardComparable"]["n"]
+        assert report["comparableStationHours"] == report["airportBaseline"]["n"]
 
     def test_meta_carries_provenance_and_the_seed(self, client):
         meta = client.get("/plan").json()["meta"]

@@ -1,0 +1,46 @@
+{
+  "study_name": "Phoenix observed air-temperature validation",
+  "timezone": "America/Phoenix",
+  "observation_source": "NOAA/FAA ASOS/METAR observations accessed through the Iowa Environmental Mesonet archive",
+  "observation_source_url": "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py",
+  "airport_baseline_station_id": "PHX",
+  "matching_tolerance_minutes": 15,
+  "dates": [
+    "2026-07-14",
+    "2026-07-19",
+    "2026-08-14"
+  ],
+  "hours": [15, 16, 17, 18, 19, 20, 21],
+  "stations": [
+    {
+      "id": "PHX",
+      "name": "Phoenix Sky Harbor International Airport",
+      "latitude": 33.4343,
+      "longitude": -112.0116
+    },
+    {
+      "id": "DVT",
+      "name": "Phoenix Deer Valley Airport",
+      "latitude": 33.6883,
+      "longitude": -112.0826
+    },
+    {
+      "id": "SDL",
+      "name": "Scottsdale Airport",
+      "latitude": 33.6229,
+      "longitude": -111.9105
+    },
+    {
+      "id": "FFZ",
+      "name": "Falcon Field Airport",
+      "latitude": 33.4608,
+      "longitude": -111.7283
+    }
+  ],
+  "fortyguard": {
+    "granularity_m": 60,
+    "analytic_type": "tcm",
+    "aoi_half_size_m": 120,
+    "max_station_to_tile_distance_m": 150
+  }
+}

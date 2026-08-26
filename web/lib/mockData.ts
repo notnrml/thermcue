@@ -223,6 +223,7 @@ const queueStates: QueueState[] = gates.flatMap((gate) =>
       gateId: gate.id,
       hour,
       arrivals: p.arrivals,
+      queueLength: Math.round((p.arrivals * p.wait) / 60),
       waitTimeMinutes: p.wait,
       personMinutes: p.arrivals * p.wait,
     };

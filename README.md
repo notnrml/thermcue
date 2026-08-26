@@ -17,7 +17,7 @@ We measured what that costs, using FortyGuard. Across the venue the **air
 temperature** is essentially uniform — 0.07 °C between the hottest and coolest
 zone. That is the honest result, and it is not the interesting one. What varies
 is the **heat load**: sun, surface and shade. On the same site, at the same air
-temperature, wet-bulb globe temperature spans zones, and **19 zone-hours fall in
+temperature, wet-bulb globe temperature spans zones, and **20 zone-hours fall in
 a different heat band from what the airport reports**. An operator reading the
 station would have staffed those hours wrong.
 
@@ -106,7 +106,7 @@ Running the engine directly:
 ```bash
 cd engine
 uv venv --python 3.11 && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests/ -q          # 131 tests
+.venv/bin/python -m pytest tests/ -q          # 182 tests
 .venv/bin/python -m uvicorn thermcue.api:app --reload
 ```
 
@@ -635,11 +635,11 @@ This is the sponsor-hero result, and it does not point the way I expected.
 
 Maximum intra-venue **air-temperature** spread is **0.07 °C** — consistent with
 the scale measurement above, and an honest result rather than a flattering one.
-But **19 zone-hours disagree with Sky Harbor on band**, because band assignment
+But **20 zone-hours disagree with Sky Harbor on band**, because band assignment
 runs on WBGT, and WBGT carries the shade and radiant terms the station cannot
 see:
 
-> Civic Plaza reads high band at 16:00 while Phoenix Sky Harbor International Airport (KPHX) reads extreme. A plan built on the station alone would misjudge conditions there, committing resources against a band the venue does not actually reach, and 19 zone-hours disagree across the event window.
+> Civic Plaza reads high band at 15:00 while Phoenix Sky Harbor International Airport (KPHX) reads extreme. A plan built on the station alone would misjudge conditions there, committing resources against a band the venue does not actually reach, and 20 zone-hours disagree across the event window.
 
 Note the direction: the **airport reads hotter than the venue**, not cooler. Sky
 Harbor is an open airfield with no shade at all, while the venue sits among
@@ -652,6 +652,53 @@ Either direction is the same failure: **the station is not measuring the place
 where the people are.** That is the argument, and it survives a flat
 air-temperature field precisely because the product indexes on WBGT rather than
 on a thermometer reading.
+
+That 20-zone-hour result is a **planning-model comparison**, not independent
+field validation. It combines the airport reference with modelled shade and
+radiant terms. It must not be presented as proof that FortyGuard itself has been
+validated against 20 measured venue outcomes.
+
+### Independent observed-temperature validation
+
+A separate workstream now compares FortyGuard `tcm` air temperature directly
+with NOAA/FAA ASOS/METAR measurements at four Phoenix-area stations. Its study
+design fixes three dates and seven hours before scoring, accepts a station
+observation only within 15 minutes, and accepts a FortyGuard tile only for the
+same hour and within 150 m. Every pair retains its sensor time, tile location,
+distance, activity ID and cache source.
+
+The independent observations are complete (**84/84**). FortyGuard supplied
+usable, distance-qualified tiles for **63/84** station-hours: all PHX, DVT and
+SDL hours. All 21 Falcon Field activities completed with empty heatmaps, so they
+remain excluded and explicitly labelled rather than treated as measurements.
+
+On the 42 non-PHX rows where both methods estimate exactly the same observation,
+local FortyGuard has **1.193 °C MAE** and reusing KPHX has **1.019 °C MAE**.
+Each is closer on 21 readings. This dataset therefore does **not** prove that
+FortyGuard is generally a more accurate local thermometer than KPHX. It is a
+real, reproducible negative result and the machine-readable report remains
+`status: "partial"` because Falcon Field has no usable tiles.
+
+Run `research/scripts/build_observed_validation.py --fetch-fortyguard` with the
+team key to complete the matrix. The exact method, current evidence and permitted
+claims are in `research/OBSERVED_VALIDATION.md`; the report is exposed at
+`GET /validation/observed`.
+
+For the next evidence steps, use the [remote validation protocol](research/REMOTE_VALIDATION.md).
+It defines the minimum queue-log fields, a held-out replay procedure, the
+boundary between a SURFRAD algorithm benchmark and field WBGT validation, and
+the product decisions to make when evidence is missing. The queue evaluator is
+deliberately dependency-free:
+
+```bash
+python research/scripts/evaluate_queue_log.py \
+  --observed research/data/queue_validation_template.csv \
+  --predicted path/to/predicted_queue.csv
+```
+
+Use `research/scripts/export_simulation_queue.py` to turn a saved `/simulate`
+response into the hourly prediction file. The template is a schema only; it is
+not an event result and must not be filled with invented values for a demo claim.
 
 ### The agent
 
@@ -729,6 +776,18 @@ no keys and `THERMCUE_OFFLINE=1`, which is the exact judging condition:
 GET /plan -> HTTP 200, 21 KB
 freshness: cached | spatial signal: True | zone-hours: 35
 ```
+
+## Workstream 3 method (150 words)
+
+ThermCue paired 275 FortyGuard tOS tiles from four Phoenix districts at 17:00 on 14 August 2026 with TESSERA v1.1 annual 2025 embeddings. Each 10 m location contributes 128 features; the target is its FortyGuard temperature minus the four-area sample mean. A standardised Ridge model was assessed with nested leave-one-district-out cross-validation, selecting alpha inside each training fold. It achieved out-of-fold R² −0.525, RMSE 1.314 °C, and MAE 0.874 °C. This is worse than predicting the sample mean, so the output is a reproducible prototype, not a validated citywide heat surface or forecast. Venue drivers use cached FortyGuard satellite segmentation for three of five zones; absent street-view evidence and uncovered zones remain null, never imputed. TESSERA cluster and distance checks are descriptive at this sample size. Engine and UI consume the resulting driver score and evidence narrative. Rebuild with the pinned research environment and execute the notebook from the local repository root.
+
+Product meaning: “Given FortyGuard readings at a few hundred points, surface embeddings let us screen heat-risk structure across an entire city, so an operator can shortlist cooler venue configurations before commissioning full hyperlocal coverage.” The current model does not yet validate that proposition; it tests it and records the negative result.
+
+Reproduce with `research/scripts/build_research_outputs.py`, execute
+`research/anomaly_model.ipynb`, then run
+`research/scripts/export_validation.py`. Schema and scientific defences are in
+`research/DRIVER_SCHEMA.md`, `research/WBGT_DEFENCE.md`, and
+`research/HPM_METRIC_DEFENCE.md`.
 
 ## Track mapping
 
@@ -811,7 +870,7 @@ thermcue/
 │   ├── thermcue/        client · thermal · shade · simulate · optimise · agent
 │   ├── data/            scenario_phoenix.json, response cache
 │   ├── scripts/         verify_api · build_cache · scale_experiment · headline
-│   └── tests/           131 tests
+│   └── tests/           182 tests
 ├── web/                 Next.js 14, TypeScript, Tailwind, MapLibre — Workstream 1
 ├── research/            Workstream 3 outputs (read-only to the engine)
 └── docker-compose.yml
@@ -828,6 +887,7 @@ thermcue/
 | `POST /optimise` | Plan changes with why-traces, KPIs, weight sensitivity |
 | `GET /pareto` | Frontier plus the scored candidate cloud |
 | `GET /validation` | Zone-versus-station series and the generated verdict |
+| `GET /validation/observed` | Direct ASOS/METAR-to-FortyGuard temperature pairs, errors, provenance and completeness |
 | `GET /plan` | The whole Plan Workspace contract in one call |
 | `GET /export/pdf` · `GET /export/ics` | One-page action card · calendar |
 | `GET /credits` | FortyGuard spend, per endpoint |
@@ -838,7 +898,7 @@ thermcue/
 
 ```bash
 cd engine && .venv/bin/python -m pytest tests/ -q
-# 131 passed in 289s
+# 182 passed in 327s on the latest local verification
 ```
 
 Coverage is aimed at the failure modes that would mislead a judge: conservation

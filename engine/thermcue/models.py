@@ -47,6 +47,8 @@ class Zone(Wire):
     wbgt_band: WbgtBand
     temperature_c: float
     shade_coverage: float = Field(ge=0.0, le=1.0)
+    driver_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    driver_narrative: str | None = None
 
     @field_validator("polygon")
     @classmethod
@@ -109,6 +111,7 @@ class QueueState(Wire):
     gate_id: str
     hour: int
     arrivals: int
+    queue_length: float
     wait_time_minutes: float
     person_minutes: float
 
@@ -196,6 +199,105 @@ class ValidationResponse(Wire):
     station_source: str
 
 
+# ---------------------------------------------- observed validation ---
+
+
+class ErrorMetrics(Wire):
+    """Measured estimate-minus-observation errors in degrees Celsius."""
+
+    n: int = Field(ge=0)
+    mae_c: float | None = Field(default=None, ge=0.0)
+    bias_c: float | None = None
+    rmse_c: float | None = Field(default=None, ge=0.0)
+    max_abs_error_c: float | None = Field(default=None, ge=0.0)
+
+
+class StationValidationResult(Wire):
+    station_id: str
+    station_name: str
+    latitude: float
+    longitude: float
+    fortyguard: ErrorMetrics
+    airport_baseline: ErrorMetrics
+
+
+class ObservedValidationPair(Wire):
+    station_id: str
+    station_name: str
+    latitude: float
+    longitude: float
+    target_time_local: str
+    observation_time_local: str
+    observation_time_delta_minutes: float = Field(ge=0.0)
+    observed_temperature_c: float
+    fortyguard_temperature_c: float
+    fortyguard_error_c: float
+    fortyguard_absolute_error_c: float = Field(ge=0.0)
+    airport_temperature_c: float | None = None
+    airport_error_c: float | None = None
+    airport_absolute_error_c: float | None = Field(default=None, ge=0.0)
+    fortyguard_activity_id: str | None = None
+    fortyguard_freshness: DataFreshness
+    fortyguard_tile_id: str
+    fortyguard_tile_longitude: float
+    fortyguard_tile_latitude: float
+    station_to_tile_distance_m: float = Field(ge=0.0)
+    fortyguard_cache_file: str
+
+
+class ObservedValidationResponse(Wire):
+    """Independent station-to-FortyGuard temperature validation."""
+
+    status: Literal["complete", "partial", "unavailable"]
+    study_name: str
+    dates: list[str]
+    hours: list[int]
+    timezone: str
+    matching_tolerance_minutes: int = Field(gt=0)
+    station_source: str
+    fortyguard_source: str
+    airport_baseline_station_id: str
+    expected_station_hours: int = Field(ge=0)
+    observed_station_hours: int = Field(ge=0)
+    paired_station_hours: int = Field(ge=0)
+    # All accepted FortyGuard-to-sensor pairs, including KPHX itself.
+    fortyguard: ErrorMetrics
+    # Only non-KPHX rows for which both methods estimate the same observation.
+    # This is the apples-to-apples counterpart to ``airport_baseline``.
+    fortyguard_comparable: ErrorMetrics
+    airport_baseline: ErrorMetrics
+    comparable_station_hours: int = Field(ge=0)
+    fortyguard_better_count: int = Field(ge=0)
+    airport_better_count: int = Field(ge=0)
+    tie_count: int = Field(ge=0)
+    station_results: list[StationValidationResult]
+    pairs: list[ObservedValidationPair]
+    unmatched: list[dict]
+    limitations: list[str]
+
+
+class ObservedValidationSummary(Wire):
+    """Small judge-facing slice of the independent validation report.
+
+    The full report remains available from ``/validation/observed``. The plan
+    payload carries only the fields needed to label the UI without shipping all
+    raw station pairs on every workspace request.
+    """
+
+    status: Literal["complete", "partial", "unavailable"]
+    study_name: str
+    expected_station_hours: int = Field(ge=0)
+    observed_station_hours: int = Field(ge=0)
+    paired_station_hours: int = Field(ge=0)
+    comparable_station_hours: int = Field(ge=0)
+    fortyguard_comparable: ErrorMetrics
+    airport_baseline: ErrorMetrics
+    fortyguard_better_count: int = Field(ge=0)
+    airport_better_count: int = Field(ge=0)
+    tie_count: int = Field(ge=0)
+    limitations: list[str]
+
+
 # ---------------------------------------------------------------- bundles ---
 
 
@@ -212,6 +314,7 @@ class PlanWorkspaceData(Wire):
     validation_points: list[ValidationPoint]
     validation_summary: ValidationSummary
     wbgt_hourly: list[WbgtHourly]
+    observed_validation: ObservedValidationSummary | None = None
 
 
 # ------------------------------------------------- internal thermal types ---

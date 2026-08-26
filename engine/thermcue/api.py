@@ -39,6 +39,8 @@ from .models import (
     HourlyZoneState,
     KpiComparison,
     KpiSet,
+    ObservedValidationSummary,
+    ObservedValidationResponse,
     PlanChange,
     PlanWorkspaceData,
     Resource,
@@ -49,6 +51,7 @@ from .models import (
     WhyTraceStep,
     Zone,
 )
+from .observed_validation import load_observed_validation
 from .optimise import OptimisationResult, run_full_optimisation
 from .plan import Plan
 from .scenario import Scenario, ScenarioError, load_scenario
@@ -242,6 +245,16 @@ def _scenario_payload(scenario: Scenario, bundle: ThermalBundle) -> ScenarioEven
                     if lookup.get((z.id, peak_hour))
                     else z.built_shade_fraction
                 ),
+                driver_score=(
+                    lookup.get((z.id, peak_hour)).driver_score
+                    if lookup.get((z.id, peak_hour))
+                    else None
+                ),
+                driver_narrative=(
+                    lookup.get((z.id, peak_hour)).driver_narrative
+                    if lookup.get((z.id, peak_hour))
+                    else None
+                ),
             )
             for z in scenario.zones
         ],
@@ -298,9 +311,17 @@ def _plan_changes(result: OptimisationResult) -> list[PlanChange]:
                     WhyTraceStep(
                         stage="Effect",
                         detail=(
-                            f"Heat-weighted person-minutes fall by "
-                            f"{change.hpm_delta:,.0f} when this change is kept, measured "
-                            f"by removing it and re-simulating."
+                            (
+                                f"Heat-weighted person-minutes fall by "
+                                f"{change.hpm_delta:,.0f} when this change is kept, "
+                                f"measured by removing it and re-simulating."
+                            )
+                            if change.hpm_delta > 0
+                            else (
+                                "This change has no independent positive effect in "
+                                "the leave-one-out replay; it remains only as part of "
+                                "an interacting feasible plan."
+                            )
                         ),
                     ),
                 ],
@@ -452,6 +473,7 @@ async def post_simulate(
                 "gateId": r["gate_id"],
                 "hour": r["hour"],
                 "arrivals": r["arrivals"],
+                "queueLength": r["queue_length"],
                 "waitTimeMinutes": r["wait_time_minutes"],
                 "personMinutes": r["person_minutes"],
             }
@@ -546,6 +568,35 @@ async def get_validation_endpoint() -> dict[str, Any]:
     }
 
 
+@app.get("/validation/observed")
+async def get_observed_validation_endpoint() -> dict[str, Any]:
+    """Independent ASOS/METAR comparison for FortyGuard air temperature.
+
+    This endpoint is intentionally separate from ``/validation``. The older
+    endpoint compares a planning model with an airport-based planning reference;
+    this one reports direct air-temperature pairs against measured sensors and
+    does not involve WBGT, shade, queues or the fictional event scenario.
+    """
+
+    path = get_settings().observed_validation_path
+    if not path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Observed validation artefact is unavailable. Run "
+                "research/scripts/build_observed_validation.py first."
+            ),
+        )
+    try:
+        report: ObservedValidationResponse = load_observed_validation(path)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Observed validation artefact is invalid: {exc}",
+        ) from exc
+    return report.model_dump(by_alias=True)
+
+
 @app.get("/plan")
 async def get_plan_workspace() -> dict[str, Any]:
     """The whole Plan Workspace payload in one call.
@@ -559,6 +610,34 @@ async def get_plan_workspace() -> dict[str, Any]:
     bundle = await state.get_bundle()
     result = await state.get_optimisation()
     validation = await state.get_validation()
+
+    # The complete report is served separately for audit. Only its measured
+    # summary belongs in the workspace response, so the UI can label the
+    # planning-model chart without pretending that every raw pair is a venue
+    # measurement.
+    observed_validation: ObservedValidationSummary | None = None
+    observed_path = get_settings().observed_validation_path
+    if observed_path.exists():
+        try:
+            observed = load_observed_validation(observed_path)
+            observed_validation = ObservedValidationSummary(
+                status=observed.status,
+                study_name=observed.study_name,
+                expected_station_hours=observed.expected_station_hours,
+                observed_station_hours=observed.observed_station_hours,
+                paired_station_hours=observed.paired_station_hours,
+                comparable_station_hours=observed.comparable_station_hours,
+                fortyguard_comparable=observed.fortyguard_comparable,
+                airport_baseline=observed.airport_baseline,
+                fortyguard_better_count=observed.fortyguard_better_count,
+                airport_better_count=observed.airport_better_count,
+                tie_count=observed.tie_count,
+                limitations=observed.limitations,
+            )
+        except (OSError, ValueError):
+            # A malformed optional artefact must not take down the plan. The
+            # dedicated endpoint still reports the precise 500 for debugging.
+            observed_validation = None
 
     optimised = simulate_fast(
         scenario, result.optimised.plan, bundle.field, seed=HEADLINE_SEED
@@ -607,6 +686,7 @@ async def get_plan_workspace() -> dict[str, Any]:
                 "gateId": r["gate_id"],
                 "hour": r["hour"],
                 "arrivals": r["arrivals"],
+                "queueLength": r["queue_length"],
                 "waitTimeMinutes": r["wait_time_minutes"],
                 "personMinutes": r["person_minutes"],
             }
@@ -619,6 +699,7 @@ async def get_plan_workspace() -> dict[str, Any]:
         validation_points=validation.points,
         validation_summary=validation.summary,
         wbgt_hourly=envelope_by_hour,
+        observed_validation=observed_validation,
     )
     return payload.model_dump(by_alias=True) | {
         "meta": {

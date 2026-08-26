@@ -8,10 +8,9 @@ stay up even with the network removed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-
-from dataclasses import dataclass
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -170,6 +169,10 @@ class Settings(BaseSettings):
     drivers_path: Path = Field(
         default=RESEARCH_DIR / "zone_heat_drivers.json", alias="THERMCUE_DRIVERS_PATH"
     )
+    observed_validation_path: Path = Field(
+        default=RESEARCH_DIR / "observed_validation.json",
+        alias="THERMCUE_OBSERVED_VALIDATION_PATH",
+    )
     cors_origins: str = Field(default="*", alias="THERMCUE_CORS_ORIGINS")
 
     @property
@@ -198,7 +201,7 @@ class Settings(BaseSettings):
         return None
 
     @property
-    def llm(self) -> "LlmConfig | None":
+    def llm(self) -> LlmConfig | None:
         """Fully resolved model configuration, or None if the agent has no model.
 
         Returning None rather than raising is deliberate: the engine must serve

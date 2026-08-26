@@ -7,6 +7,7 @@ import type {
   KpiSet,
   ParetoPoint,
   PlanChange,
+  ObservedValidationSummary,
   ValidationPoint,
   ValidationSummary,
   Zone,
@@ -31,6 +32,7 @@ interface RightRailProps {
   simulating: boolean;
   validationPoints: ValidationPoint[];
   validationSummary: ValidationSummary;
+  observedValidation?: ObservedValidationSummary | null;
   zones: Zone[];
   timezone: string;
 }
@@ -94,6 +96,7 @@ export default function RightRail(props: RightRailProps) {
           tabs={[
             { id: "compare", label: "Compare" },
             { id: "agent", label: "Agent" },
+            { id: "drivers", label: "Drivers" },
             { id: "validation", label: "Validation" },
           ]}
           value={tab}
@@ -104,6 +107,7 @@ export default function RightRail(props: RightRailProps) {
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "compare" ? <CompareTab {...props} /> : null}
         {tab === "agent" ? <AgentTab {...props} /> : null}
+        {tab === "drivers" ? <DriversTab {...props} /> : null}
         {tab === "validation" ? <ValidationTab {...props} /> : null}
       </div>
     </div>
@@ -222,20 +226,69 @@ function AgentTab({
   );
 }
 
+function DriversTab({ zones }: RightRailProps) {
+  return (
+    <div className="space-y-4">
+      <section>
+        <h3 className="mb-1 text-body font-semibold text-base-text">
+          Physical heat drivers by zone
+        </h3>
+        <p className="text-caption text-base-muted">
+          FortyGuard satellite segmentation, cross-checked with annual TESSERA
+          surface embeddings. Scores describe structural exposure; they are not
+          temperatures or forecasts.
+        </p>
+      </section>
+
+      {zones.map((zone) => {
+        const available = zone.driverScore != null;
+        return (
+          <section
+            key={zone.id}
+            className="rounded-card border border-base-border bg-base-elevated p-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h4 className="text-body font-semibold text-base-text">
+                {zone.name}
+              </h4>
+              <span
+                className={
+                  available
+                    ? "rounded-pill bg-wbgt-high/15 px-2 py-1 font-mono text-caption text-wbgt-high"
+                    : "rounded-pill bg-base-bg px-2 py-1 text-caption text-base-muted"
+                }
+              >
+                {available
+                  ? `Driver ${Math.round((zone.driverScore ?? 0) * 100)}`
+                  : "Evidence unavailable"}
+              </span>
+            </div>
+            <p className="mt-2 text-body text-base-secondary">
+              {zone.driverNarrative ??
+                "No committed zone-driver evidence is available; no surface claim is made."}
+            </p>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 function ValidationTab({
   validationPoints,
   validationSummary,
+  observedValidation,
   zones,
 }: RightRailProps) {
   return (
     <div className="space-y-4">
       <section>
         <h3 className="mb-1 text-body font-semibold text-base-text">
-          Zone temperatures against the airport station
+          Planning-model comparison
         </h3>
         <p className="mb-2 text-caption text-base-muted">
-          Per-zone FortyGuard readings across the day, with the single
-          Phoenix Sky Harbor station value dashed.
+          The chart compares modelled venue zones with the airport reference.
+          It is not field validation of WBGT or queues.
         </p>
         <div className="rounded-card border border-base-border bg-base-bg p-2">
           <ValidationChart points={validationPoints} zones={zones} />
@@ -259,6 +312,81 @@ function ValidationTab({
           {validationSummary.verdictDecision}
         </p>
       </section>
+
+      <ObservedValidationCard report={observedValidation} />
     </div>
   );
+}
+
+function ObservedValidationCard({
+  report,
+}: {
+  report?: ObservedValidationSummary | null;
+}) {
+  if (!report) {
+    return (
+      <section className="rounded-card border border-base-border bg-base-elevated p-4">
+        <span className="text-label uppercase tracking-wide text-base-muted">
+          Independent temperature check
+        </span>
+        <p className="mt-2 text-body text-base-secondary">
+          No measured station report is loaded in this workspace. The full
+          check is available from the engine when its report is present.
+        </p>
+      </section>
+    );
+  }
+
+  const local = report.fortyguardComparable;
+  const airport = report.airportBaseline;
+  return (
+    <section className="rounded-card border border-base-border bg-base-elevated p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="text-label uppercase tracking-wide text-base-muted">
+            Independent temperature check
+          </span>
+          <p className="mt-1 text-caption text-base-muted">
+            Real ASOS/METAR readings matched to same-hour FortyGuard tiles.
+          </p>
+        </div>
+        <span className="rounded-pill bg-wbgt-high/15 px-2 py-1 text-caption uppercase text-wbgt-high">
+          {report.status}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Metric label="Station hours" value={`${report.observedStationHours}/${report.expectedStationHours}`} />
+        <Metric label="FG tiles matched" value={`${report.pairedStationHours}/${report.expectedStationHours}`} />
+        <Metric label="Fair rows" value={`${report.comparableStationHours}`} />
+        <Metric label="FG wins" value={`${report.fortyguardBetterCount}–${report.airportBetterCount}`} />
+      </div>
+
+      <div className="mt-3 border-t border-base-border pt-3 text-caption text-base-secondary">
+        <p>
+          On the same {report.comparableStationHours} rows: FortyGuard MAE{" "}
+          <span className="font-mono text-base-text">{formatMetric(local.maeC)} C</span>;
+          reuse airport MAE{" "}
+          <span className="font-mono text-base-text">{formatMetric(airport.maeC)} C</span>.
+        </p>
+        <p className="mt-1 text-base-muted">
+          This checks the temperature connection only. It does not validate
+          venue WBGT, queue forecasts or the benefit of a recommendation.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-card border border-base-border bg-base-bg p-2">
+      <span className="block text-label uppercase tracking-wide text-base-muted">{label}</span>
+      <span className="font-mono text-body text-base-text">{value}</span>
+    </div>
+  );
+}
+
+function formatMetric(value: number | null): string {
+  return value == null ? "—" : value.toFixed(2);
 }

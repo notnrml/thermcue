@@ -100,9 +100,10 @@ function PlanWorkspaceInner({ data }: PlanWorkspaceProps) {
       return state
         ? {
             ...gate,
-            queueLength: Math.round(
-              state.personMinutes / Math.max(1, state.waitTimeMinutes),
-            ),
+            // Older engines did not publish queueLength yet. Their
+            // personMinutes are still enough to recover the time-average for
+            // a one-hour row, so staggered frontend/backend deploys stay safe.
+            queueLength: Math.round(state.queueLength ?? state.personMinutes / 60),
             waitTimeMinutes: state.waitTimeMinutes,
           }
         : gate;
@@ -229,6 +230,7 @@ function PlanWorkspaceInner({ data }: PlanWorkspaceProps) {
             simulating={simulating}
             validationPoints={data.validationPoints}
             validationSummary={data.validationSummary}
+            observedValidation={data.observedValidation}
             zones={scenario.zones}
             timezone={scenario.timezone}
           />
