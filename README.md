@@ -543,7 +543,7 @@ cd engine && THERMCUE_OFFLINE=1 .venv/bin/python scripts/headline.py
 ```
 
 Peak forecast air temperature **40.4 °C at 16:00**; band census across the 35
-zone-hours is **1 Extreme, 9 High, 25 Moderate**; analogue day **2026-07-14 at
+zone-hours is **high 10, moderate 25**; analogue day **2026-07-14 at
 RMS 0.44 °C**.
 
 | | Baseline | ThermCue plan | Change |
@@ -553,7 +553,7 @@ RMS 0.44 °C**.
 | Total wait (person-minutes) | 902,332 | 718,383 | **−20.4 %** |
 | Longest single wait | 199 min | 151 min | **−24.1 %** |
 
-12,247 candidate plans simulated. The brief's acceptance gate was ≥20 % HPM
+11,565 candidate plans simulated. The brief's acceptance gate was ≥20 % HPM
 reduction at ≤10 % wait increase: **both clear**, and wait falls by a fifth
 rather than rising.
 
@@ -598,12 +598,18 @@ places.
 
 | Share | Change |
 |---:|---|
-| 42.5 % | Move 1 staff from Gate C (4 → 3) |
-| 24.0 % | Move 1 staff to Gate D (3 → 4) |
-| 23.8 % | Open Gate C 45 minutes early |
-| 9.7 % | Stagger 20% of arrivals by 30 minutes |
+| 52.8 % | Open Gate C 45 minutes early |
+| 25.7 % | Reallocate staff: Gate C 4 → 3; Gate D 3 → 4 |
+| 21.5 % | Stagger 20% of arrivals by 30 minutes |
 
 Plus two relief relocations, scored against relief coverage rather than HPM.
+
+**Staffing appears as one action, not two.** Reverting a donor without its
+receiver produces a plan with the wrong total headcount on a fixed roster, so its
+counterfactual cannot be interpreted. An earlier version of this table split them
+and reported 42.5 % for a donor reduction as though it were independently
+beneficial; grouping the reallocation moved the true driver to the top, where it
+belongs.
 
 Shares come from **leave-one-out counterfactuals** — each change is removed from
 the winning plan on its own and the plan re-simulated — not from an attribution
@@ -629,9 +635,43 @@ and the table is **arithmetically bound to agree**, proving nothing;
 bands are unexercised, because four identical rows presented as four independent
 confirmations is worse than no table.
 
-### Validation against the single station
+### Independent validation: does FortyGuard beat the airport?
 
-This is the sponsor-hero result, and it does not point the way I expected.
+Workstream 3 ran the study that could have sunk the pitch, and published the
+result either way. Four Phoenix ASOS stations, three completed hot-season dates,
+seven afternoon hours, 84 planned station-hours. A FortyGuard `tcm` tile is
+matched to an observation only when it is the same date and hour and within
+150 m of the sensor, and the nearest METAR is within 15 minutes.
+
+On the 42 rows where a fair comparison is possible:
+
+| Estimate used for those 42 local observations | MAE | Bias | RMSE |
+|---|---:|---:|---:|
+| Local FortyGuard tile | 1.193 °C | −0.383 °C | 1.422 °C |
+| Reuse the main airport everywhere | **1.019 °C** | +1.019 °C | 1.134 °C |
+
+**FortyGuard wins 21, the airport wins 21, and the airport's MAE is lower.** This
+study does not support selling improved local air-temperature accuracy. It is
+published here, in the README and in the product's own Validation panel, because
+an unfavourable result that gets buried is worth less than no study at all.
+
+Twenty-one Falcon Field activities completed and returned empty heatmaps; they
+are reported as `fortyguard_empty_heatmap` and excluded, with activity IDs
+retained. An API completion is not a measurement.
+
+### Why that is the answer we expected
+
+Because it is the same thing we measured from the other direction. Air
+temperature spread on FortyGuard tiles: **0.044 °C** within the venue, **0.056 °C**
+venue to airport, **2.42 °C** only once you reach South Mountain 12 km away. A
+thermometer 4.5 km away is a good proxy for another thermometer.
+
+So air temperature is neither FortyGuard's advantage nor the station's blind
+spot. Both studies agree on that, and the product never depended on it.
+
+### What the airport cannot see
+
+This is where the gap actually is.
 
 Maximum intra-venue **air-temperature** spread is **0.07 °C** — consistent with
 the scale measurement above, and an honest result rather than a flattering one.
