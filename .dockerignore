@@ -1,0 +1,36 @@
+# The engine image builds from the repository root so that research/ is inside
+# the context (see engine/Dockerfile). That pulls everything else in with it, so
+# exclude the large things explicitly: without this the context went from a few
+# megabytes to hundreds and the build stopped finishing in reasonable time.
+
+.git
+.github
+
+# Node and Next.js build output
+node_modules
+**/node_modules
+web/.next
+web/out
+web/.vercel
+
+# Python virtualenvs and caches
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+
+# Secrets never belong in an image layer, even a discarded one.
+**/.env
+**/.env.local
+
+# Generated locally, not needed at runtime
+engine/outputs
+**/.DS_Store
+
+# The web app has its own image and its own context.
+web/app
+web/components
+web/lib
+web/public
+web/types

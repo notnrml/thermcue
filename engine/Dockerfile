@@ -20,12 +20,23 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+# Build context is the REPOSITORY ROOT, not engine/. research/ is a runtime
+# input - Workstream 3's zone drivers and the observed-validation report - and it
+# lives outside engine/, so a context rooted there silently shipped an image
+# without either. Locally everything worked; deployed, the Drivers tab was empty
+# for every zone and /validation/observed returned 503. Deploy with:
+#   fly deploy --config engine/fly.toml --dockerfile engine/Dockerfile
+# from the repository root.
+COPY engine/pyproject.toml ./
 RUN uv pip install --system --no-cache .
 
-COPY thermcue ./thermcue
-COPY scripts ./scripts
-COPY data ./data
+COPY engine/thermcue ./thermcue
+COPY engine/scripts ./scripts
+COPY engine/data ./data
+
+# Read-only to the engine, but it must be present or two of the product's
+# evidence surfaces degrade to "unavailable" without saying why.
+COPY research /research
 
 # The cache is baked into the image so the judging deployment serves the demo
 # even with the network removed, which is exactly what the submission checklist

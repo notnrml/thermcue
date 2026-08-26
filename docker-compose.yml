@@ -11,8 +11,9 @@
 services:
   engine:
     build:
-      context: ./engine
-      dockerfile: Dockerfile
+      # Repository root, so research/ is inside the context. See engine/Dockerfile.
+      context: .
+      dockerfile: engine/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -27,7 +28,6 @@ services:
       # Persisted so a rebuild does not discard cached FortyGuard responses and
       # spend credits re-fetching them.
       - ./engine/data/cache:/app/data/cache
-      - ./research:/research:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)"]
       interval: 30s

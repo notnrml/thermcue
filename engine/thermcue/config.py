@@ -19,7 +19,13 @@ ENGINE_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ENGINE_ROOT / "data"
 CACHE_DIR = DATA_DIR / "cache"
 FIXTURE_DIR = DATA_DIR / "fixtures"
-RESEARCH_DIR = ENGINE_ROOT.parent / "research"
+# In the container the engine is at /app and research is mounted at /research;
+# in a checkout it is a sibling of engine/. Prefer whichever exists so the same
+# code path serves both without an environment variable nobody remembers to set.
+_CONTAINER_RESEARCH = Path("/research")
+RESEARCH_DIR = (
+    _CONTAINER_RESEARCH if _CONTAINER_RESEARCH.is_dir() else ENGINE_ROOT.parent / "research"
+)
 
 
 @dataclass(slots=True, frozen=True)
