@@ -233,10 +233,14 @@ function DriversTab({ zones }: RightRailProps) {
         <h3 className="mb-1 text-body font-semibold text-base-text">
           Physical heat drivers by zone
         </h3>
+        {/* No TESSERA claim. research/OBSERVED_VALIDATION.md states plainly that
+          * the study does not use TESSERA, and no embedding artefact exists in
+          * this repository, so a cross-check with it cannot be asserted on a
+          * panel a judge reads. */}
         <p className="text-caption text-base-muted">
-          FortyGuard satellite segmentation, cross-checked with annual TESSERA
-          surface embeddings. Scores describe structural exposure; they are not
-          temperatures or forecasts.
+          FortyGuard satellite segmentation, one snapshot per zone centroid.
+          Scores describe structural surface exposure; they are not
+          temperatures, anomalies or forecasts.
         </p>
       </section>
 
@@ -252,9 +256,12 @@ function DriversTab({ zones }: RightRailProps) {
                 {zone.name}
               </h4>
               <span
+                /* Neutral, not a band colour. A driver score is a surface
+                 * index, and tinting it wbgt-high implies the zone is reading
+                 * High, which is a different measurement entirely. */
                 className={
                   available
-                    ? "rounded-pill bg-wbgt-high/15 px-2 py-1 font-mono text-caption text-wbgt-high"
+                    ? "rounded-pill border border-base-border bg-base-bg px-2 py-1 font-mono text-caption text-base-tertiary"
                     : "rounded-pill bg-base-bg px-2 py-1 text-caption text-base-muted"
                 }
               >
