@@ -506,3 +506,90 @@ class TestRateLimitHandling:
         directive = await ThermCieAgentShim(scenario, settings).decide()
         assert directive.grounded is False
         assert route.call_count == 1
+
+
+def text_ok(text: str) -> httpx.Response:
+    return httpx.Response(
+        200, json={"choices": [{"message": {"role": "assistant", "content": text}}]}
+    )
+
+
+class TestModelIsSpentOnDecisions:
+    """A heartbeat that finds nothing changed must not cost a model call."""
+
+    def test_a_daily_cap_is_distinguished_from_a_per_minute_one(self):
+        """Waiting out a daily cap changes nothing and costs the caller minutes.
+        The deployed agent backed off for 122 s against one before failing, and
+        the cap is visible nowhere but the error body."""
+        from thermcue.agent import _is_daily_quota_exhausted
+
+        daily = httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "Rate limit reached ... on tokens per day (TPD): "
+                    "Limit 200000, Used 199557"
+                }
+            },
+        )
+        per_minute = httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "Rate limit reached ... on tokens per minute (TPM): Limit 8000"
+                }
+            },
+        )
+        assert _is_daily_quota_exhausted(daily) is True
+        assert _is_daily_quota_exhausted(per_minute) is False
+        assert _is_daily_quota_exhausted(httpx.Response(500, text="boom")) is False
+
+    @respx.mock
+    async def test_a_quiet_tick_does_not_call_the_model(self, scenario):
+        """96 ticks a day against a 200,000-token daily cap is the whole
+        allowance, which is how the demo trigger came to be refused."""
+        settings = make_settings()
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            return_value=text_ok("NO-ACTION | Nothing moved. | Plan stands.")
+        )
+        agent = ThermCueAgent(scenario, settings)
+        await agent.decide()  # cold start establishes the baseline
+        route.reset()
+
+        directive = await agent.decide()
+        assert route.call_count == 0, "a quiet tick must not spend model tokens"
+        assert directive.engine == "deterministic"
+
+    @respx.mock
+    async def test_an_explicit_trigger_always_calls_the_model(self, scenario):
+        settings = make_settings()
+        route = respx.post(f"{BASE}/chat/completions").mock(
+            return_value=text_ok("REPLAN | Something moved. | Effect stated.")
+        )
+        agent = ThermCueAgent(scenario, settings)
+        await agent.decide()
+        route.reset()
+
+        await agent.decide(perturbation={"z-lawn": 4.0})
+        assert route.call_count > 0, "a trigger is a decision and must reach the model"
+
+    @respx.mock
+    async def test_daily_exhaustion_degrades_rather_than_failing(self, scenario):
+        """A known, time-bounded state must not read as the agent being down."""
+        settings = make_settings()
+        respx.post(f"{BASE}/chat/completions").mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "message": "on tokens per day (TPD): Limit 200000, Used 200000"
+                    }
+                },
+            )
+        )
+        agent = ThermCueAgent(scenario, settings)
+        directive = await agent.decide(perturbation={"z-lawn": 4.0})
+        # The published directive is the deterministic fallback, so the operator
+        # still gets a usable decision rather than an error.
+        assert directive.engine == "deterministic"
+        assert directive.tag in ("REPLAN", "NO-ACTION", "MONITOR")

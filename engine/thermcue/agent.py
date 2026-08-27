@@ -85,6 +85,10 @@ class DirectiveRejected(RuntimeError):
     """A generated directive cited a number no tool produced."""
 
 
+class DailyQuotaExhausted(RuntimeError):
+    """The provider's daily allowance is gone. Retrying is pointless today."""
+
+
 class ToolGenerationError(RuntimeError):
     """The provider rejected the model's own tool call before running it.
 
@@ -126,6 +130,28 @@ def _retry_after_seconds(response: "httpx.Response", fallback: float) -> float:
         # A small margin: the window has to have actually rolled over.
         return float(found.group(1)) + 1.0
     return fallback
+
+
+def _is_daily_quota_exhausted(response: "httpx.Response") -> bool:
+    """Is this 429 a daily cap rather than a per-minute one?
+
+    The distinction decides whether waiting helps. A tokens-per-minute limit
+    resets in seconds and is worth sitting out; a tokens-per-day limit resets
+    hours from now, so retrying it burns the caller's patience and changes
+    nothing. The deployed agent spent 122 seconds backing off against a daily
+    cap before failing, which is the worst of both outcomes.
+
+    Groq exposes only the per-minute window in headers, so the daily cap is
+    visible nowhere except the error body.
+    """
+    if response.status_code != 429:
+        return False
+    try:
+        message = str(((response.json() or {}).get("error") or {}).get("message", ""))
+    except ValueError:
+        message = response.text[:600]
+    lowered = message.lower()
+    return "per day" in lowered or "tpd" in lowered or "rpd" in lowered
 
 
 def _is_tool_generation_failure(response: "httpx.Response") -> bool:
@@ -793,17 +819,22 @@ class ThermCueAgent:
             await self.publisher(directive)
         return directive
 
-    def _advance_reference(self, tools: "AgentTools") -> None:
+    async def _advance_reference(self, tools: "AgentTools") -> None:
         """Adopt the current bands as the standing plan's basis.
 
         Called after a replan and on the first cycle. Without this the same
         forecast revision would re-trigger a replan on every tick and the console
         would fill with identical directives.
+
+        Builds the bundle if the cycle never happened to load one. It used to
+        return silently in that case, which is reachable whenever a model answers
+        without calling a tool: the reference then stayed empty, every later tick
+        counted as "no standing plan" and went to the model, and on a metered tier
+        that is an unbounded spend loop rather than a missing optimisation.
         """
-        if tools._bundle is None:
-            return
+        bundle = await tools.bundle()
         self.reference_bands = {
-            zone: dict(hours) for zone, hours in tools._bundle.field.band.items()
+            zone: dict(hours) for zone, hours in bundle.field.band.items()
         }
 
     async def decide(self, perturbation: dict[str, float] | None = None) -> Directive:
@@ -812,7 +843,23 @@ class ThermCueAgent:
         if perturbation:
             tools.perturbation = dict(perturbation)
 
-        if self.settings.has_model:
+        # Spend the model on decisions, not on heartbeats.
+        #
+        # The timer loop mostly finds nothing changed, and calling a model to say
+        # so is the wrong trade at any budget. On a metered free tier it is also
+        # fatal: 96 ticks a day against a 200,000-token daily cap is the entire
+        # allowance, and the deployed agent duly exhausted it and returned 429 to
+        # the demo trigger - the one call that actually matters.
+        #
+        # So an untriggered tick with no band change against the standing plan
+        # takes the deterministic path, which is what that path is for and which
+        # labels itself honestly. A trigger, or a real band change, gets the
+        # model.
+        model_is_warranted = bool(perturbation) or not self.reference_bands
+        if self.settings.has_model and not model_is_warranted:
+            model_is_warranted = await self._has_band_change(tools)
+
+        if self.settings.has_model and model_is_warranted:
             try:
                 return await self._publish(await self._decide_with_model(tools, bool(perturbation)))
             except DirectiveRejected as exc:
@@ -835,6 +882,22 @@ class ThermCueAgent:
                         grounded=False,
                     )
                 )
+            except DailyQuotaExhausted as exc:
+                # Not an error to shout about on every tick: it is a known,
+                # time-bounded state. Publish it once, plainly, and carry on
+                # deterministically rather than pretending the agent is down.
+                await self._publish(
+                    Directive(
+                        id=f"agent-{uuid.uuid4().hex[:8]}",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        tag="MONITOR",
+                        text=f"Model unavailable: {exc}",
+                        tool_calls=tools.calls,
+                        engine=self._engine_label(),
+                        grounded=False,
+                    )
+                )
+                return await self._publish(await self._decide_deterministically(tools))
             except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
                 return await self._publish(
                     Directive(
@@ -849,6 +912,24 @@ class ThermCueAgent:
                 )
 
         return await self._publish(await self._decide_deterministically(tools))
+
+    async def _has_band_change(self, tools: "AgentTools") -> bool:
+        """Is there anything for the model to reason about?
+
+        Reuses the same tool the agent would call first, so the check costs one
+        thermal-bundle read (cached) and no model tokens, and its result lands in
+        the audit trace exactly as it would have anyway.
+
+        Routed through ``dispatch`` rather than calling the tool directly, so it
+        registers in the per-cycle dedup set. Called directly it recorded a
+        second identical entry in the trace and the model paid full price for a
+        result it already had.
+        """
+        try:
+            state = await tools.dispatch("get_thermal_state", {})
+        except Exception:  # noqa: BLE001 - a failed check must not block deciding
+            return True
+        return bool(state.get("band_changes_vs_plan"))
 
     def _engine_label(self) -> str:
         """What produced a directive, published with it.
@@ -889,7 +970,7 @@ class ThermCueAgent:
             tag = "MONITOR"
 
         if tag == "REPLAN" or not tools.reference_bands:
-            self._advance_reference(tools)
+            await self._advance_reference(tools)
 
         return Directive(
             id=f"agent-{uuid.uuid4().hex[:8]}",
@@ -1018,6 +1099,13 @@ class ThermCueAgent:
                         return response.json()
                     if _is_tool_generation_failure(response):
                         raise ToolGenerationError(response.text[:300])
+                    if _is_daily_quota_exhausted(response):
+                        raise DailyQuotaExhausted(
+                            f"{llm.model} has exhausted its daily token allowance. "
+                            f"Waiting will not help; the window resets on the "
+                            f"provider's schedule. The agent falls back to its "
+                            f"deterministic path until then. {response.text[:200]}"
+                        )
                     last = response.text[:400]
                     if response.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
                         raise RuntimeError(
@@ -1127,7 +1215,7 @@ class ThermCueAgent:
             # First cycle: there is nothing to diff against yet. Adopt the
             # current forecast as the plan's basis and say so, rather than
             # inventing a change or staying silent.
-            self._advance_reference(tools)
+            await self._advance_reference(tools)
             worst = max(state["zones"], key=lambda z: BAND_ORDER.index(z["band"]), default=None)
             return Directive(
                 id=f"agent-{uuid.uuid4().hex[:8]}",
@@ -1183,7 +1271,7 @@ class ThermCueAgent:
             f"{optimisation['total_wait_change_pct']}% change in total wait."
         )
         ungrounded = ground_numbers(text, collect_tool_numbers(tools.calls))
-        self._advance_reference(tools)
+        await self._advance_reference(tools)
         return Directive(
             id=f"agent-{uuid.uuid4().hex[:8]}",
             timestamp=datetime.now(timezone.utc).isoformat(),
