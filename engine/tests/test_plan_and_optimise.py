@@ -254,3 +254,43 @@ class TestMetricDefence:
         table = weight_sensitivity(scenario, Plan.baseline(scenario), best.plan, thermal)
         assert "headline-0124" in table
         assert len(table) >= 4
+
+
+class TestArchiveMemory:
+    """The archive must stay small enough to survive a real machine.
+
+    The deployed engine was OOM-killed mid-request and /plan returned 502 while
+    /health stayed green, because the health check never touches the optimiser.
+    Cause: every scored candidate retained a full SimResult, which carries
+    per-minute arrivals, served, queue and open-mask lists for every gate. That
+    was survivable at 3,245 candidates and fatal at 11,565.
+    """
+
+    def test_archive_entries_do_not_retain_time_series(self, scenario, thermal):
+        from thermcue.optimise import ArchivedPlan, optimise
+
+        archive: list[ArchivedPlan] = []
+        optimise(scenario, thermal, archive=archive)
+
+        assert archive, "the search must record what it scored"
+        entry = archive[0]
+        assert not hasattr(entry, "result"), (
+            "an archived candidate must not carry a SimResult; that is what "
+            "exhausted the machine's memory"
+        )
+        assert isinstance(entry.hpm, float)
+        assert isinstance(entry.total_wait, float)
+
+    def test_the_winner_resimulates_to_its_archived_figures(self, scenario, thermal, optimisation):
+        """The archive drops the winner's result and it is recomputed. That is
+        only sound because the simulation is deterministic, so assert it rather
+        than trusting the comment that says so."""
+        from thermcue.simulate import HEADLINE_SEED, simulate_fast
+
+        replayed = simulate_fast(
+            scenario, optimisation.optimised.plan, thermal, seed=HEADLINE_SEED
+        )
+        assert replayed.hpm == pytest.approx(optimisation.optimised.hpm, rel=1e-9)
+        assert replayed.total_wait_minutes == pytest.approx(
+            optimisation.optimised.total_wait, rel=1e-9
+        )

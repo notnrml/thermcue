@@ -93,6 +93,27 @@ class ScoredPlan:
         return self.result.total_wait_minutes
 
 
+@dataclass(slots=True, frozen=True)
+class ArchivedPlan:
+    """A scored candidate reduced to what the frontier actually needs.
+
+    A ScoredPlan carries a SimResult, and a SimResult carries per-minute
+    arrivals, served, queue and open-mask lists for every gate: roughly 6,700
+    Python floats per candidate. That was survivable at 3,245 candidates and
+    fatal at 11,565 once the search gained time-windowed staff swaps - the
+    deployed engine was OOM-killed mid-request and /plan returned 502 while
+    /health stayed green, because the health check never touches the optimiser.
+
+    The frontier and the scatter only ever read two numbers and the plan, so
+    only those are retained. The winner is re-simulated once at the end, which
+    costs a millisecond and is exact because the simulation is deterministic.
+    """
+
+    plan: Plan
+    hpm: float
+    total_wait: float
+
+
 @dataclass(slots=True)
 class ChangeExplanation:
     """One accepted change and why it was accepted."""
@@ -569,7 +590,7 @@ def optimise(
     seed: int = HEADLINE_SEED,
     wait_ratio: float | None = None,
     staffing_proposals: Sequence[dict[str, dict[int, int]]] | None = None,
-    archive: list[ScoredPlan] | None = None,
+    archive: list[ArchivedPlan] | None = None,
 ) -> tuple[ScoredPlan, ScoredPlan, int]:
     """Search for the lowest-HPM feasible plan under the wait constraint.
 
@@ -629,7 +650,11 @@ def optimise(
         if scored is None:
             return None
         if archive is not None:
-            archive.append(scored)
+            archive.append(
+                ArchivedPlan(
+                    plan=scored.plan, hpm=scored.hpm, total_wait=scored.total_wait
+                )
+            )
         if scored.total_wait > wait_cap:
             return None
         if scored.hpm < best.hpm - 1e-9:
@@ -743,7 +768,11 @@ def optimise(
         if seeded is None:
             continue
         if archive is not None:
-            archive.append(seeded)
+            archive.append(
+                ArchivedPlan(
+                    plan=seeded.plan, hpm=seeded.hpm, total_wait=seeded.total_wait
+                )
+            )
         starts.append(seeded)
 
     for start in starts:
@@ -1091,7 +1120,7 @@ def explain(
 
 def pareto_from_archive(
     baseline: ScoredPlan,
-    archive: Sequence[ScoredPlan],
+    archive: Sequence["ArchivedPlan"],
     chosen: ScoredPlan,
     ratios: Iterable[float] = PARETO_RATIOS,
 ) -> list[dict[str, Any]]:
@@ -1124,7 +1153,10 @@ def pareto_from_archive(
 
 
 def pareto_scatter(
-    baseline: ScoredPlan, archive: Sequence[ScoredPlan], chosen: ScoredPlan, limit: int = 60
+    baseline: ScoredPlan,
+    archive: Sequence["ArchivedPlan"],
+    chosen: ScoredPlan,
+    limit: int = 60,
 ) -> list[dict[str, Any]]:
     """Candidate cloud for the Pareto chart: baseline, candidates, chosen.
 
@@ -1133,7 +1165,7 @@ def pareto_scatter(
     communicates nothing.
     """
     seen: set[tuple[int, int]] = set()
-    unique: list[ScoredPlan] = []
+    unique: list["ArchivedPlan"] = []
     for candidate in archive:
         key = (int(candidate.total_wait / 100), int(candidate.hpm / 100))
         if key in seen:
@@ -1141,7 +1173,7 @@ def pareto_scatter(
         seen.add(key)
         unique.append(candidate)
 
-    def dominated(candidate: ScoredPlan) -> bool:
+    def dominated(candidate: "ArchivedPlan") -> bool:
         return any(
             other.total_wait <= candidate.total_wait
             and other.hpm <= candidate.hpm
@@ -1198,7 +1230,7 @@ def run_full_optimisation(
     scatter the chart needs, for the cost of one search.
     """
     proposals = default_proposals(scenario, thermal)
-    archive: list[ScoredPlan] = []
+    archive: list[ArchivedPlan] = []
     baseline, best, evaluated = optimise(
         scenario,
         thermal,
@@ -1211,9 +1243,18 @@ def run_full_optimisation(
     # whole frontier. The headline plan is then the best candidate under the
     # scenario's own declared allowance, not the loosest one.
     headline_cap = baseline.total_wait * scenario.limits.max_wait_increase_ratio
-    eligible = [c for c in archive if c.total_wait <= headline_cap] or [baseline]
-    best = min(eligible, key=lambda c: c.hpm)
-    best = ScoredPlan(plan=best.plan.with_changes(label="optimised"), result=best.result)
+    eligible = [c for c in archive if c.total_wait <= headline_cap]
+    if eligible:
+        winner = min(eligible, key=lambda c: c.hpm)
+        # Re-simulate the winner to recover the full result the archive dropped.
+        # Deterministic, so this reproduces the archived figures exactly; a test
+        # asserts that rather than assuming it.
+        best = ScoredPlan(
+            plan=winner.plan.with_changes(label="optimised"),
+            result=simulate_fast(scenario, winner.plan, thermal, seed=seed),
+        )
+    else:
+        best = baseline
 
     changes = explain(scenario, thermal, baseline, best, seed=seed)
     frontier = pareto_from_archive(baseline, archive, best)
